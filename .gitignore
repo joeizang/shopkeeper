@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+
+# Android / Gradle
+.gradle/
+.gradle-dist/
+**/build/
+local.properties
+*.iml
+captures/
+.cxx/
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Local database artifacts
+*.db
+*.sqlite
+*.sqlite3

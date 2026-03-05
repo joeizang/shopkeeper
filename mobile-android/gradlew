@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+GRADLE_VERSION="8.13"
+DIST_NAME="gradle-${GRADLE_VERSION}"
+DIST_URL="https://services.gradle.org/distributions/${DIST_NAME}-bin.zip"
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+CACHE_DIR="${ROOT_DIR}/.gradle-dist"
+ZIP_PATH="${CACHE_DIR}/${DIST_NAME}-bin.zip"
+DIST_DIR="${CACHE_DIR}/${DIST_NAME}"
+
+mkdir -p "${CACHE_DIR}"
+
+if [ ! -x "${DIST_DIR}/bin/gradle" ]; then
+  echo "Bootstrapping Gradle ${GRADLE_VERSION}..."
+  if command -v curl >/dev/null 2>&1; then
+    curl -fL "${DIST_URL}" -o "${ZIP_PATH}"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -O "${ZIP_PATH}" "${DIST_URL}"
+  else
+    echo "Error: curl or wget is required to download Gradle." >&2
+    exit 1
+  fi
+  unzip -q -o "${ZIP_PATH}" -d "${CACHE_DIR}"
+fi
+
+exec "${DIST_DIR}/bin/gradle" "$@"
