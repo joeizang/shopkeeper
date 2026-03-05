@@ -10,6 +10,9 @@ interface InventoryDao {
     @Query("SELECT * FROM inventory_items ORDER BY updatedAtUtcIso DESC")
     suspend fun getAll(): List<InventoryItemEntity>
 
+    @Query("SELECT * FROM inventory_items WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): InventoryItemEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: InventoryItemEntity)
 
@@ -25,6 +28,9 @@ interface SalesDao {
     @Query("SELECT * FROM sales ORDER BY updatedAtUtcIso DESC")
     suspend fun getAll(): List<SaleEntity>
 
+    @Query("SELECT * FROM sales WHERE id = :id LIMIT 1")
+    suspend fun getById(id: String): SaleEntity?
+
     @Query("DELETE FROM sales WHERE id = :id")
     suspend fun deleteById(id: String)
 }
@@ -36,6 +42,9 @@ interface SyncDao {
 
     @Query("SELECT * FROM sync_queue ORDER BY id ASC LIMIT :limit")
     suspend fun getPending(limit: Int): List<SyncQueueEntity>
+
+    @Query("DELETE FROM sync_queue WHERE entityId = :entityId")
+    suspend fun deleteByEntityId(entityId: String)
 
     @Query("DELETE FROM sync_queue WHERE id = :id")
     suspend fun deleteById(id: Long)

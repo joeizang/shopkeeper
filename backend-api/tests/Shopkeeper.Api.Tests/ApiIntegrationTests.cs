@@ -171,6 +171,106 @@ public sealed class ApiIntegrationTests
         Assert.Equal(HttpStatusCode.Conflict, staleUpdateResponse.StatusCode);
     }
 
+    [Fact]
+    public async Task OwnerPolicy_DeniesCrossTenantStaffInvite()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var ownerA = await RegisterOwner(client, "owner-invite-a@shopkeeper.local", "Invite Shop A");
+        var ownerB = await RegisterOwner(client, "owner-invite-b@shopkeeper.local", "Invite Shop B");
+
+        SetBearer(client, ownerA.AccessToken);
+        var inviteResponse = await client.PostAsJsonAsync($"/api/v1/shops/{ownerB.ShopId}/staff/invite", new
+        {
+            fullName = "Cross Tenant Staff",
+            email = "cross-tenant@shopkeeper.local",
+            phone = (string?)null,
+            temporaryPassword = "Staff1234"
+        });
+
+        Assert.Equal(HttpStatusCode.Forbidden, inviteResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task MagicLink_RequestAndVerify_RoundTrips_WhenDebugTokenAvailable()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var email = $"owner-magic-{suffix}@shopkeeper.local";
+        var registerResponse = await client.PostAsJsonAsync("/api/v1/auth/register-owner", new
+        {
+            fullName = "Magic Owner",
+            email,
+            phone = (string?)null,
+            password = "Shopkeeper123!",
+            shopName = $"Magic Shop {suffix}",
+            vatEnabled = true,
+            vatRate = 0.075m
+        });
+        registerResponse.EnsureSuccessStatusCode();
+        var auth = (await registerResponse.Content.ReadFromJsonAsync<AuthEnvelope>())!;
+
+        var requestMagic = await client.PostAsJsonAsync("/api/v1/auth/magic-link/request", new
+        {
+            email,
+            shopId = auth.ShopId
+        });
+        Assert.Equal(HttpStatusCode.Accepted, requestMagic.StatusCode);
+        var challenge = (await requestMagic.Content.ReadFromJsonAsync<MagicLinkRequestEnvelope>())!;
+        Assert.False(string.IsNullOrWhiteSpace(challenge.DebugToken));
+
+        var verifyResponse = await client.PostAsJsonAsync("/api/v1/auth/magic-link/verify", new
+        {
+            token = challenge.DebugToken,
+            shopId = auth.ShopId
+        });
+        verifyResponse.EnsureSuccessStatusCode();
+        var magicAuth = (await verifyResponse.Content.ReadFromJsonAsync<AuthEnvelope>())!;
+        Assert.False(string.IsNullOrWhiteSpace(magicAuth.AccessToken));
+        Assert.False(string.IsNullOrWhiteSpace(magicAuth.RefreshToken));
+    }
+
+    [Fact]
+    public async Task AccountProfile_ReadAndUpdate_Works()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-account@shopkeeper.local", "Account Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var meResponse = await client.GetAsync("/api/v1/account/me");
+        meResponse.EnsureSuccessStatusCode();
+        var me = (await meResponse.Content.ReadFromJsonAsync<AccountProfileEnvelope>())!;
+        Assert.Equal("Test Owner", me.FullName);
+
+        var patchResponse = await client.PatchAsJsonAsync("/api/v1/account/me", new
+        {
+            fullName = "Updated Owner Name",
+            phone = "08035550000",
+            avatarUrl = "https://example.com/avatar.png",
+            preferredLanguage = "en",
+            timezone = "Africa/Lagos"
+        });
+        patchResponse.EnsureSuccessStatusCode();
+        var updated = (await patchResponse.Content.ReadFromJsonAsync<AccountProfileEnvelope>())!;
+        Assert.Equal("Updated Owner Name", updated.FullName);
+        Assert.Equal("08035550000", updated.Phone);
+        Assert.Equal("Africa/Lagos", updated.Timezone);
+    }
+
     private static async Task<AuthEnvelope> RegisterOwner(HttpClient client, string email, string shopName)
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
@@ -190,7 +290,12 @@ public sealed class ApiIntegrationTests
             vatEnabled = true,
             vatRate = 0.075m
         });
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync();
+            throw new Xunit.Sdk.XunitException(
+                $"RegisterOwner failed: {(int)response.StatusCode} {response.StatusCode}. Body: {body}");
+        }
         return (await response.Content.ReadFromJsonAsync<AuthEnvelope>())!;
     }
 
@@ -280,4 +385,14 @@ public sealed class ApiIntegrationTests
         List<SalePaymentEnvelope> Payments);
     private sealed record CreditAccountEnvelope(Guid Id, Guid SaleId, DateTime DueDateUtc, decimal OutstandingAmount, int Status);
     private sealed record CreditDetailsEnvelope(CreditAccountEnvelope Account);
+    private sealed record MagicLinkRequestEnvelope(Guid RequestId, DateTime ExpiresAtUtc, string Message, string? DebugToken);
+    private sealed record AccountProfileEnvelope(
+        Guid UserId,
+        string FullName,
+        string? Email,
+        string? Phone,
+        string? AvatarUrl,
+        string? PreferredLanguage,
+        string? Timezone,
+        DateTime CreatedAtUtc);
 }

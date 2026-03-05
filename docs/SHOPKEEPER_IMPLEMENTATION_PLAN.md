@@ -62,12 +62,20 @@ Sync:
 - `POST /sync/push`
 - `POST /sync/pull`
 
+Reporting:
+- `GET /reports/inventory`
+- `GET /reports/sales`
+- `GET /reports/profit-loss`
+- `GET /reports/creditors`
+- `GET /reports/{reportType}/export`
+
 Core server/domain types:
 - `Shop`, `User`, `ShopMembership`
 - `InventoryItem`, `ItemPhoto`, `StockAdjustment`
 - `Sale`, `SaleLine`, `SalePayment`
 - `CreditAccount`, `CreditRepayment`
 - `SyncChange`, `DeviceCheckpoint`
+- `Expense`, `ReportJob`, `ReportFile` (v2 hardening and async generation)
 
 Cross-cutting fields on mutable business entities:
 - `TenantId`, `UpdatedAtUtc`, `RowVersion`
@@ -96,6 +104,14 @@ Cross-cutting fields on mutable business entities:
 - Detect row-version conflicts and return conflict payload.
 11. Add audit logs for stock changes, sales, voids, and repayments.
 12. Add standardized ProblemDetails responses and validation filters.
+13. Implement reporting endpoints:
+- Inventory, sales, P&L, and creditors previews.
+- Date-range filters for sales, P&L, and creditors.
+- Owner-only restriction for P&L.
+14. Implement export pipeline:
+- Format `pdf` for printable reports.
+- Format `spreadsheet` for spreadsheet-compatible CSV download.
+- Consistent totals between preview and exports.
 
 ## Android Implementation Plan (Kotlin + Compose)
 1. Create app modules/packages:
@@ -123,6 +139,11 @@ Cross-cutting fields on mutable business entities:
 - Show local vs server values.
 - User chooses keep-local or keep-server.
 9. Add secure token storage and session handling.
+10. Add reports module:
+- Report selector for inventory, sales, P&L, and creditors.
+- Date filters with date pickers.
+- Export actions for PDF and spreadsheet.
+- Download and share generated files through Android share sheet.
 
 ## Data Model and Rules
 - Multi-tenant single SQLite DB in v1; all business rows include `TenantId`.
@@ -136,6 +157,13 @@ Cross-cutting fields on mutable business entities:
 - Used items support grade, notes, and photos.
 - Tax handling:
 - Shop-level `VatEnabled` and `VatRate`.
+- Reporting metrics:
+- Inventory value = `SUM(quantity * costPrice)`.
+- Revenue = sum of non-void sales in period.
+- COGS (v1 estimate) = sum of `lineQty * current item cost`.
+- Gross profit = revenue - COGS.
+- Net profit/loss = gross profit - expenses (expenses fixed at zero until expense module lands).
+- Creditors list includes only unsettled credit accounts with outstanding amount > 0.
 
 ## Delivery Phases
 1. Phase 1: Repo setup, auth, tenancy, base schema.
@@ -144,6 +172,7 @@ Cross-cutting fields on mutable business entities:
 4. Phase 4: Credit sales + repayment ledger.
 5. Phase 5: Offline sync + conflict resolution.
 6. Phase 6: Hardening, QA, observability, deployment packaging.
+7. Phase 7: Reporting module (preview + export + mobile share flow).
 
 ## Test Cases and Scenarios
 Backend:
@@ -152,6 +181,8 @@ Backend:
 - Sale totals, VAT, and payment consistency.
 - Credit partial repayments and close-out logic.
 - Conflict response on stale `RowVersion`.
+- Reporting totals are consistent between JSON preview and exported file.
+- P&L endpoint rejects non-owner users.
 
 Android:
 - OCR extraction requires manual confirmation before save.
@@ -159,6 +190,8 @@ Android:
 - Conflict resolution UI applies chosen action correctly.
 - PDF generation and share intents work with file URI and mime.
 - Credit outstanding updates correctly after each repayment.
+- Reports screen loads each report type and applies date filters.
+- Exported PDF/spreadsheet files download and share correctly.
 
 End-to-end:
 - Owner self-signup, create shop, add staff, sell used item, issue receipt.
@@ -171,3 +204,49 @@ End-to-end:
 - Receipt delivery uses Android share sheet targets, not direct third-party API integrations.
 - SQLite is acceptable for v1 scale; migration to PostgreSQL is deferred.
 - English locale defaults; timezone and timestamps stored UTC with local display.
+
+## Auth and Account Refactor Plan (Phases A-F)
+### Scope Decision
+- Apple auth is deferred.
+- Google auth remains in scope.
+- Magic-link flow plumbing is implemented now, while actual email delivery is deferred.
+- Mobile app adds a profile/account module for account management.
+
+### Phase A: Identity Foundation
+- Migrate backend authentication internals to Microsoft ASP.NET Core Identity (`AddIdentityCore`) with EF stores.
+- Keep current JWT access/refresh contract for mobile compatibility.
+- Introduce identity-focused entities for linked providers and sessions.
+- Add configuration guards for production auth secrets and token settings.
+
+### Phase B: Authorization Hardening
+- Enforce resource-level shop ownership checks on owner-only routes using `shopId` (not role claim alone).
+- Require active membership validation for shop-scoped mutations.
+- Add tests for cross-tenant authorization denial and policy enforcement.
+
+### Phase C: Magic Link Plumbing (No Actual Sending Yet)
+- Add `POST /auth/magic-link/request` and `POST /auth/magic-link/verify`.
+- Add `MagicLinkChallenge` persistence with hashed one-time token, expiry, and consume semantics.
+- Add email outbox records for deferred dispatch (`EmailOutboxMessage`) without calling SMTP/provider APIs.
+- Add anti-enumeration behavior and basic request throttling.
+- Return development-only debug token to allow completion of manual test flows before sender integration.
+
+### Phase D: Google Auth
+- Add `POST /auth/google/mobile` endpoint for mobile sign-in via Google ID token.
+- Validate token issuer/audience and extract trusted identity claims.
+- Upsert local user identity links (`google` provider), then issue app JWT/refresh tokens.
+- Preserve multi-shop membership resolution with optional `shopId`.
+
+### Phase E: Mobile Profile and Account Module
+- Add `Profile` tab/screen in mobile navigation.
+- Add account endpoints consumption:
+- `GET /account/me`, `PATCH /account/me`
+- `GET /account/sessions`, `POST /account/sessions/{id}/revoke`
+- `GET /account/linked-identities`
+- Show/edit profile details, linked sign-in methods, and active session controls.
+- Keep form state resilient across navigation/process recreation.
+
+### Phase F: Hardening, Testing, and Observability
+- Add unit/integration tests for identity login flows, magic-link challenge lifecycle, and resource authorization.
+- Add structured auth audit logs for key events (login, refresh, magic-link request/verify, session revoke).
+- Add cleanup strategy for expired/consumed magic-link challenges and stale sessions.
+- Validate no credentials/secrets are hardcoded or committed.

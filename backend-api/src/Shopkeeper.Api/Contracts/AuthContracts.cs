@@ -16,6 +16,18 @@ public sealed record LoginRequest(
 
 public sealed record RefreshRequest(string RefreshToken);
 
+public sealed record GoogleMobileAuthRequest(string IdToken, Guid? ShopId);
+
+public sealed record MagicLinkRequest(string Email, Guid? ShopId);
+
+public sealed record MagicLinkVerifyRequest(string Token, Guid? ShopId);
+
+public sealed record MagicLinkRequestResponse(
+    Guid RequestId,
+    DateTime ExpiresAtUtc,
+    string Message,
+    string? DebugToken);
+
 public sealed record AuthResponse(
     string AccessToken,
     string RefreshToken,

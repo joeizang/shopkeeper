@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Identity;
+
 namespace Shopkeeper.Api.Domain;
 
 public sealed class Shop : IMutableTenantEntity
@@ -20,16 +22,17 @@ public sealed class Shop : IMutableTenantEntity
     public ICollection<ShopMembership> Memberships { get; set; } = new List<ShopMembership>();
 }
 
-public sealed class UserAccount
+public class UserAccount : IdentityUser<Guid>
 {
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public override Guid Id { get; set; } = Guid.NewGuid();
     public string FullName { get; set; } = string.Empty;
-    public string? Email { get; set; }
-    public string? Phone { get; set; }
-    public string PasswordHash { get; set; } = string.Empty;
+    public string? AvatarUrl { get; set; }
+    public string? PreferredLanguage { get; set; } = "en";
+    public string? Timezone { get; set; } = "UTC";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public ICollection<ShopMembership> Memberships { get; set; } = new List<ShopMembership>();
+    public ICollection<AuthIdentity> AuthIdentities { get; set; } = new List<AuthIdentity>();
 }
 
 public sealed class ShopMembership : IMutableTenantEntity
@@ -61,8 +64,54 @@ public sealed class RefreshToken
     public string TokenHash { get; set; } = string.Empty;
     public DateTime ExpiresAtUtc { get; set; }
     public DateTime? RevokedAtUtc { get; set; }
+    public string? DeviceId { get; set; }
+    public string? DeviceName { get; set; }
+    public DateTime? LastSeenAtUtc { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
     public UserAccount UserAccount { get; set; } = default!;
     public ShopMembership ShopMembership { get; set; } = default!;
+}
+
+public sealed class AuthIdentity
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid UserAccountId { get; set; }
+    public string Provider { get; set; } = string.Empty;
+    public string ProviderSubject { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public bool EmailVerified { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime LastUsedAtUtc { get; set; } = DateTime.UtcNow;
+
+    public UserAccount UserAccount { get; set; } = default!;
+}
+
+public sealed class MagicLinkChallenge
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid? UserAccountId { get; set; }
+    public string Email { get; set; } = string.Empty;
+    public Guid? RequestedShopId { get; set; }
+    public string TokenHash { get; set; } = string.Empty;
+    public DateTime ExpiresAtUtc { get; set; }
+    public DateTime? ConsumedAtUtc { get; set; }
+    public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
+    public string? RequestIp { get; set; }
+    public string? UserAgent { get; set; }
+
+    public UserAccount? UserAccount { get; set; }
+}
+
+public sealed class EmailOutboxMessage
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public string ToEmail { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string Body { get; set; } = string.Empty;
+    public string Status { get; set; } = "Pending";
+    public int AttemptCount { get; set; }
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime? SentAtUtc { get; set; }
+    public string? LastError { get; set; }
 }

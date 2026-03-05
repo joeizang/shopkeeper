@@ -16,6 +16,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -24,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +41,7 @@ import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.ConditionGradeDropdown
 import com.shopkeeper.mobile.ui.components.ConditionGradeOption
+import com.shopkeeper.mobile.ui.components.DatePickerField
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -50,21 +54,23 @@ fun InventoryScreen() {
     val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
 
     var inventoryItems by remember { mutableStateOf<List<com.shopkeeper.mobile.core.data.local.InventoryItemEntity>>(emptyList()) }
-    var searchQuery by remember { mutableStateOf("") }
-    var isAddingItem by remember { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var isAddingItem by rememberSaveable { mutableStateOf(false) }
+    var editingItemId by rememberSaveable { mutableStateOf("") }
+    var pendingDeleteItemId by rememberSaveable { mutableStateOf("") }
 
-    var extractedSerial by remember { mutableStateOf("") }
-    var extractedModel by remember { mutableStateOf("") }
-    var productName by remember { mutableStateOf("") }
-    var quantity by remember { mutableStateOf("1") }
-    var costPrice by remember { mutableStateOf("0") }
-    var sellingPrice by remember { mutableStateOf("0") }
-    var expiryDateIso by remember { mutableStateOf("") }
-    var conditionNotes by remember { mutableStateOf("") }
-    var selectedConditionGrade by remember { mutableStateOf(ConditionGradeOption.A) }
-    var isUsed by remember { mutableStateOf(false) }
-    var capturedPhotoUris by remember { mutableStateOf<List<String>>(emptyList()) }
-    var status by remember { mutableStateOf("") }
+    var extractedSerial by rememberSaveable { mutableStateOf("") }
+    var extractedModel by rememberSaveable { mutableStateOf("") }
+    var productName by rememberSaveable { mutableStateOf("") }
+    var quantity by rememberSaveable { mutableStateOf("1") }
+    var costPrice by rememberSaveable { mutableStateOf("0") }
+    var sellingPrice by rememberSaveable { mutableStateOf("0") }
+    var expiryDateIso by rememberSaveable { mutableStateOf("") }
+    var conditionNotes by rememberSaveable { mutableStateOf("") }
+    var conditionGradeCode by rememberSaveable { mutableStateOf(ConditionGradeOption.A.code) }
+    var isUsed by rememberSaveable { mutableStateOf(false) }
+    var capturedPhotoUris by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
+    var status by rememberSaveable { mutableStateOf("") }
     var pendingCameraAction by remember { mutableStateOf(CameraAction.ScanText) }
 
     val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
@@ -184,6 +190,31 @@ fun InventoryScreen() {
                                 "Qty: ${item.quantity} • Cost: NGN ${"%.2f".format(item.costPrice)} • Sell: NGN ${"%.2f".format(item.sellingPrice)}",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = {
+                                        editingItemId = item.id
+                                        isAddingItem = true
+                                        extractedSerial = item.serialNumber.orEmpty()
+                                        extractedModel = item.modelNumber.orEmpty()
+                                        productName = item.productName
+                                        quantity = item.quantity.toString()
+                                        costPrice = item.costPrice.toString()
+                                        sellingPrice = item.sellingPrice.toString()
+                                        expiryDateIso = item.expiryDateIso?.take(10).orEmpty()
+                                        conditionNotes = item.conditionNotes.orEmpty()
+                                        conditionGradeCode = item.conditionGrade?.toIntOrNull() ?: ConditionGradeOption.A.code
+                                        isUsed = item.itemType == "2"
+                                        capturedPhotoUris = emptyList()
+                                        status = "Editing ${item.productName}"
+                                    }
+                                ) {
+                                    Text("Edit")
+                                }
+                                Button(onClick = { pendingDeleteItemId = item.id }) {
+                                    Text("Delete")
+                                }
+                            }
                         }
                     }
                 }
@@ -191,7 +222,10 @@ fun InventoryScreen() {
 
             BrickButton(
                 text = "Add Inventory Item",
-                onClick = { isAddingItem = true },
+                onClick = {
+                    editingItemId = ""
+                    isAddingItem = true
+                },
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
@@ -214,7 +248,11 @@ fun InventoryScreen() {
                 }
             }
 
-            Text("Add Inventory Item", style = MaterialTheme.typography.titleLarge)
+            val isEditing = editingItemId.isNotBlank()
+            Text(
+                if (isEditing) "Edit Inventory Item" else "Add Inventory Item",
+                style = MaterialTheme.typography.titleLarge
+            )
             BrickButton(
                 text = "Back To Summary",
                 onClick = { isAddingItem = false },
@@ -278,10 +316,10 @@ fun InventoryScreen() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            OutlinedTextField(
+            DatePickerField(
+                label = "Expiry Date (optional)",
                 value = expiryDateIso,
                 onValueChange = { expiryDateIso = it },
-                label = { Text("Expiry (YYYY-MM-DD, optional)") },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -291,9 +329,11 @@ fun InventoryScreen() {
             }
 
             if (isUsed) {
+                val selectedConditionGrade = ConditionGradeOption.entries.firstOrNull { it.code == conditionGradeCode }
+                    ?: ConditionGradeOption.A
                 ConditionGradeDropdown(
                     selected = selectedConditionGrade,
-                    onSelected = { selectedConditionGrade = it },
+                    onSelected = { conditionGradeCode = it.code },
                     modifier = Modifier.fillMaxWidth()
                 )
             }
@@ -307,31 +347,37 @@ fun InventoryScreen() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            BrickButton(text = "Save Inventory Item", onClick = {
+            BrickButton(text = if (isEditing) "Update Inventory Item" else "Save Inventory Item", onClick = {
                 if (productName.isBlank()) {
                     status = "Product name is required"
                     return@BrickButton
                 }
 
                 scope.launch {
-                    val result = gateway.saveInventoryItem(
-                        NewInventoryInput(
-                            productName = productName,
-                            modelNumber = extractedModel.ifBlank { null },
-                            serialNumber = extractedSerial.ifBlank { null },
-                            quantity = quantity.toIntOrNull() ?: 1,
-                            expiryDateIso = expiryDateIso.ifBlank { null },
-                            costPrice = costPrice.toDoubleOrNull() ?: 0.0,
-                            sellingPrice = sellingPrice.toDoubleOrNull() ?: 0.0,
-                            itemTypeCode = if (isUsed) 2 else 1,
-                            conditionGradeCode = if (isUsed) selectedConditionGrade.code else null,
-                            conditionNotes = conditionNotes.ifBlank { null },
-                            photoUris = capturedPhotoUris
-                        )
+                    val input = NewInventoryInput(
+                        productName = productName,
+                        modelNumber = extractedModel.ifBlank { null },
+                        serialNumber = extractedSerial.ifBlank { null },
+                        quantity = quantity.toIntOrNull() ?: 1,
+                        expiryDateIso = expiryDateIso.ifBlank { null },
+                        costPrice = costPrice.toDoubleOrNull() ?: 0.0,
+                        sellingPrice = sellingPrice.toDoubleOrNull() ?: 0.0,
+                        itemTypeCode = if (isUsed) 2 else 1,
+                        conditionGradeCode = if (isUsed) conditionGradeCode else null,
+                        conditionNotes = conditionNotes.ifBlank { null },
+                        photoUris = capturedPhotoUris
                     )
+
+                    val result = if (isEditing) {
+                        gateway.updateInventoryItem(editingItemId, input)
+                    } else {
+                        gateway.saveInventoryItem(input).map { Unit }
+                    }
 
                     status = result.fold(
                         onSuccess = {
+                            val action = if (isEditing) "Updated" else "Saved"
+                            editingItemId = ""
                             capturedPhotoUris = emptyList()
                             extractedSerial = ""
                             extractedModel = ""
@@ -341,15 +387,51 @@ fun InventoryScreen() {
                             sellingPrice = "0"
                             expiryDateIso = ""
                             conditionNotes = ""
+                            conditionGradeCode = ConditionGradeOption.A.code
                             isUsed = false
                             isAddingItem = false
                             refreshInventorySummary()
-                            "Saved locally and queued for sync"
+                            "$action locally and queued for sync"
                         },
-                        onFailure = { "Save failed: ${it.message.orEmpty()}" }
+                        onFailure = { "${if (isEditing) "Update" else "Save"} failed: ${it.message.orEmpty()}" }
                     )
                 }
             }, modifier = Modifier.fillMaxWidth())
+        }
+
+        if (pendingDeleteItemId.isNotBlank()) {
+            AlertDialog(
+                onDismissRequest = { pendingDeleteItemId = "" },
+                title = { Text("Delete Item") },
+                text = { Text("Are you sure you want to delete this inventory item?") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val itemId = pendingDeleteItemId
+                        pendingDeleteItemId = ""
+                        scope.launch {
+                            val result = gateway.deleteInventoryItem(itemId)
+                            status = result.fold(
+                                onSuccess = {
+                                    if (editingItemId == itemId) {
+                                        editingItemId = ""
+                                        isAddingItem = false
+                                    }
+                                    refreshInventorySummary()
+                                    "Inventory item deleted"
+                                },
+                                onFailure = { "Delete failed: ${it.message.orEmpty()}" }
+                            )
+                        }
+                    }) {
+                        Text("Delete")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingDeleteItemId = "" }) {
+                        Text("Cancel")
+                    }
+                }
+            )
         }
 
         if (status.isNotBlank()) {

@@ -16,12 +16,74 @@ data class LoginRequest(
     val shopId: String?
 )
 
+data class GoogleMobileAuthRequest(
+    val idToken: String,
+    val shopId: String?
+)
+
+data class MagicLinkRequestDto(
+    val email: String,
+    val shopId: String?
+)
+
+data class MagicLinkVerifyRequestDto(
+    val token: String,
+    val shopId: String?
+)
+
+data class MagicLinkRequestResponseDto(
+    val requestId: String,
+    val expiresAtUtc: String,
+    val message: String,
+    val debugToken: String?
+)
+
 data class AuthResponse(
     val accessToken: String,
     val refreshToken: String,
     val accessTokenExpiresAtUtc: String,
     val shopId: String,
     val role: String
+)
+
+data class AccountProfileResponseDto(
+    val userId: String,
+    val fullName: String,
+    val email: String?,
+    val phone: String?,
+    val avatarUrl: String?,
+    val preferredLanguage: String?,
+    val timezone: String?,
+    val createdAtUtc: String
+)
+
+data class UpdateAccountProfileRequestDto(
+    val fullName: String,
+    val phone: String?,
+    val avatarUrl: String?,
+    val preferredLanguage: String?,
+    val timezone: String?
+)
+
+data class SessionViewDto(
+    val sessionId: String,
+    val shopId: String,
+    val role: String,
+    val deviceId: String?,
+    val deviceName: String?,
+    val createdAtUtc: String,
+    val expiresAtUtc: String,
+    val lastSeenAtUtc: String?,
+    val isRevoked: Boolean
+)
+
+data class LinkedIdentityViewDto(
+    val provider: String,
+    val providerSubject: String,
+    val email: String?,
+    val emailVerified: Boolean,
+    val createdAtUtc: String,
+    val lastUsedAtUtc: String
 )
 
 data class InventoryItemResponse(
@@ -141,4 +203,82 @@ data class SaleSyncPayload(
     val isCredit: Boolean,
     val dueDateUtc: String?,
     val updatedAtUtc: String
+)
+
+data class InventoryReportRowDto(
+    val itemId: String,
+    val productName: String,
+    val quantity: Int,
+    val costPrice: Double,
+    val sellingPrice: Double,
+    val costValue: Double,
+    val sellingValue: Double,
+    val expiryDate: String?
+)
+
+data class InventoryReportResponseDto(
+    val generatedAtUtc: String,
+    val totalProducts: Int,
+    val totalUnits: Int,
+    val lowStockItems: Int,
+    val totalCostValue: Double,
+    val totalSellingValue: Double,
+    val items: List<InventoryReportRowDto>
+)
+
+data class SalesDailySummaryRowDto(
+    val date: String,
+    val salesCount: Int,
+    val revenue: Double,
+    val outstanding: Double
+)
+
+data class SalesPaymentSummaryRowDto(
+    val method: String,
+    val amount: Double
+)
+
+data class SalesReportResponseDto(
+    val generatedAtUtc: String,
+    val fromUtc: String,
+    val toUtc: String,
+    val salesCount: Int,
+    val revenue: Double,
+    val vatAmount: Double,
+    val discountAmount: Double,
+    val outstandingAmount: Double,
+    val daily: List<SalesDailySummaryRowDto>,
+    val payments: List<SalesPaymentSummaryRowDto>
+)
+
+data class ProfitLossReportResponseDto(
+    val generatedAtUtc: String,
+    val fromUtc: String,
+    val toUtc: String,
+    val revenue: Double,
+    val cogs: Double,
+    val grossProfit: Double,
+    val expenses: Double,
+    val netProfitLoss: Double
+)
+
+data class CreditorReportRowDto(
+    val creditAccountId: String,
+    val saleId: String,
+    val saleNumber: String,
+    val customerName: String,
+    val itemsSummary: String,
+    val dueDateUtc: String,
+    val daysOverdue: Int,
+    val outstandingAmount: Double,
+    val status: String
+)
+
+data class CreditorsReportResponseDto(
+    val generatedAtUtc: String,
+    val fromUtc: String?,
+    val toUtc: String?,
+    val openCredits: Int,
+    val totalOutstanding: Double,
+    val credits: List<CreditorReportRowDto>
 )

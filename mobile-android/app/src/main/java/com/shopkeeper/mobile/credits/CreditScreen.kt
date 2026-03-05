@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -39,13 +40,14 @@ fun CreditScreen() {
     val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
 
     var creditSales by remember { mutableStateOf<List<com.shopkeeper.mobile.core.data.CreditSaleOption>>(emptyList()) }
-    var saleId by remember { mutableStateOf("") }
-    var saleDropdownExpanded by remember { mutableStateOf(false) }
-    var repaymentAmount by remember { mutableStateOf("") }
-    var paymentMethod by remember { mutableStateOf(PaymentMethodOption.Cash) }
-    var reference by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
-    var status by remember { mutableStateOf("") }
+    var saleId by rememberSaveable { mutableStateOf("") }
+    var saleDropdownExpanded by rememberSaveable { mutableStateOf(false) }
+    var repaymentAmount by rememberSaveable { mutableStateOf("") }
+    var paymentMethodCode by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
+    val paymentMethod = PaymentMethodOption.fromCode(paymentMethodCode)
+    var reference by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var status by rememberSaveable { mutableStateOf("") }
 
     fun refreshCredits() {
         scope.launch {
@@ -127,7 +129,7 @@ fun CreditScreen() {
 
         PaymentMethodDropdown(
             selected = paymentMethod,
-            onSelected = { paymentMethod = it },
+            onSelected = { paymentMethodCode = it.code },
             modifier = Modifier.fillMaxWidth()
         )
 

@@ -1,9 +1,11 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Data;
 
-public sealed class ShopkeeperDbContext : DbContext
+public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
 {
     public ShopkeeperDbContext(DbContextOptions<ShopkeeperDbContext> options)
         : base(options)
@@ -11,9 +13,11 @@ public sealed class ShopkeeperDbContext : DbContext
     }
 
     public DbSet<Shop> Shops => Set<Shop>();
-    public DbSet<UserAccount> Users => Set<UserAccount>();
     public DbSet<ShopMembership> ShopMemberships => Set<ShopMembership>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<AuthIdentity> AuthIdentities => Set<AuthIdentity>();
+    public DbSet<MagicLinkChallenge> MagicLinkChallenges => Set<MagicLinkChallenge>();
+    public DbSet<EmailOutboxMessage> EmailOutboxMessages => Set<EmailOutboxMessage>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<ItemPhoto> ItemPhotos => Set<ItemPhoto>();
     public DbSet<StockAdjustment> StockAdjustments => Set<StockAdjustment>();
@@ -28,6 +32,13 @@ public sealed class ShopkeeperDbContext : DbContext
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        base.OnModelCreating(modelBuilder);
+
+        modelBuilder.Entity<UserAccount>().ToTable("Users");
+        modelBuilder.Entity<IdentityUserClaim<Guid>>().ToTable("UserClaims");
+        modelBuilder.Entity<IdentityUserLogin<Guid>>().ToTable("UserLogins");
+        modelBuilder.Entity<IdentityUserToken<Guid>>().ToTable("UserTokens");
+
         modelBuilder.Entity<Shop>()
             .HasIndex(x => x.Code)
             .IsUnique();
@@ -46,7 +57,25 @@ public sealed class ShopkeeperDbContext : DbContext
             .HasIndex(x => x.Email);
 
         modelBuilder.Entity<UserAccount>()
-            .HasIndex(x => x.Phone);
+            .HasIndex(x => x.PhoneNumber);
+
+        modelBuilder.Entity<AuthIdentity>()
+            .HasOne(x => x.UserAccount)
+            .WithMany(x => x.AuthIdentities)
+            .HasForeignKey(x => x.UserAccountId);
+
+        modelBuilder.Entity<AuthIdentity>()
+            .HasIndex(x => new { x.Provider, x.ProviderSubject })
+            .IsUnique();
+
+        modelBuilder.Entity<MagicLinkChallenge>()
+            .HasOne(x => x.UserAccount)
+            .WithMany()
+            .HasForeignKey(x => x.UserAccountId);
+
+        modelBuilder.Entity<MagicLinkChallenge>()
+            .HasIndex(x => x.TokenHash)
+            .IsUnique();
 
         modelBuilder.Entity<InventoryItem>()
             .HasIndex(x => new { x.TenantId, x.SerialNumber })
@@ -100,6 +129,10 @@ public sealed class ShopkeeperDbContext : DbContext
             .HasOne(x => x.ShopMembership)
             .WithMany()
             .HasForeignKey(x => x.ShopMembershipId);
+
+        modelBuilder.Entity<RefreshToken>()
+            .HasIndex(x => x.TokenHash)
+            .IsUnique();
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {

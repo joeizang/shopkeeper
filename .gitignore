@@ -4,6 +4,8 @@
 # .NET
 **/bin/
 **/obj/
+backend-api/**/bin/
+backend-api/**/obj/
 *.user
 *.suo
 
@@ -11,6 +13,7 @@
 .gradle/
 .gradle-dist/
 **/build/
+mobile-android/**/build/
 local.properties
 *.iml
 captures/

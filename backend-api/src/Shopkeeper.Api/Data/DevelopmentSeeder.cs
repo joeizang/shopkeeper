@@ -1,12 +1,15 @@
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Shopkeeper.Api.Domain;
-using Shopkeeper.Api.Infrastructure;
 
 namespace Shopkeeper.Api.Data;
 
 public static class DevelopmentSeeder
 {
-    public static async Task SeedAsync(ShopkeeperDbContext db, PasswordHasher hasher, CancellationToken ct = default)
+    public static async Task SeedAsync(
+        ShopkeeperDbContext db,
+        UserManager<UserAccount> userManager,
+        CancellationToken ct = default)
     {
         var hasUsers = await db.Users.AnyAsync(ct);
         if (hasUsers)
@@ -18,8 +21,15 @@ public static class DevelopmentSeeder
         {
             FullName = "Demo Owner",
             Email = "owner@shopkeeper.local",
-            PasswordHash = hasher.HashPassword("Shopkeeper123!")
+            UserName = "owner@shopkeeper.local",
+            EmailConfirmed = true
         };
+
+        var ownerCreate = await userManager.CreateAsync(owner, "Shopkeeper123!");
+        if (!ownerCreate.Succeeded)
+        {
+            return;
+        }
 
         var shop = new Shop
         {
@@ -67,7 +77,6 @@ public static class DevelopmentSeeder
             }
         };
 
-        db.Users.Add(owner);
         db.Shops.Add(shop);
         db.ShopMemberships.Add(membership);
         db.InventoryItems.AddRange(sampleItems);

@@ -10,25 +10,38 @@ import com.shopkeeper.mobile.core.data.local.ShopkeeperDatabase
 import com.shopkeeper.mobile.core.data.local.SyncConflictEntity
 import com.shopkeeper.mobile.core.data.local.SyncQueueEntity
 import com.shopkeeper.mobile.core.data.remote.AddItemPhotoRequest
+import com.shopkeeper.mobile.core.data.remote.AccountProfileResponseDto
+import com.shopkeeper.mobile.core.data.remote.CreditorsReportResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreateInventoryItemRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleResponse
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentRequest
+import com.shopkeeper.mobile.core.data.remote.GoogleMobileAuthRequest
 import com.shopkeeper.mobile.core.data.remote.InventoryItemResponse
+import com.shopkeeper.mobile.core.data.remote.InventoryReportResponseDto
 import com.shopkeeper.mobile.core.data.remote.LoginRequest
+import com.shopkeeper.mobile.core.data.remote.LinkedIdentityViewDto
+import com.shopkeeper.mobile.core.data.remote.MagicLinkRequestDto
+import com.shopkeeper.mobile.core.data.remote.MagicLinkRequestResponseDto
+import com.shopkeeper.mobile.core.data.remote.MagicLinkVerifyRequestDto
 import com.shopkeeper.mobile.core.data.remote.NetworkFactory
+import com.shopkeeper.mobile.core.data.remote.ProfitLossReportResponseDto
 import com.shopkeeper.mobile.core.data.remote.RegisterOwnerRequest
 import com.shopkeeper.mobile.core.data.remote.SaleSyncPayload
+import com.shopkeeper.mobile.core.data.remote.SalesReportResponseDto
+import com.shopkeeper.mobile.core.data.remote.SessionViewDto
 import com.shopkeeper.mobile.core.data.remote.SaleLineRequest
 import com.shopkeeper.mobile.core.data.remote.SalePaymentRequest
 import com.shopkeeper.mobile.core.data.remote.SyncPushChange
 import com.shopkeeper.mobile.core.data.remote.SyncPullRequest
 import com.shopkeeper.mobile.core.data.remote.SyncPushRequest
+import com.shopkeeper.mobile.core.data.remote.UpdateAccountProfileRequestDto
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
+import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -98,6 +111,98 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         return role.equals("Owner", ignoreCase = true)
     }
 
+    suspend fun getAccountProfile(): Result<AccountProfile> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getAccountMe().toModel() })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun updateAccountProfile(input: AccountProfileUpdateInput): Result<AccountProfile> = withContext(Dispatchers.IO) {
+        try {
+            val payload = UpdateAccountProfileRequestDto(
+                fullName = input.fullName,
+                phone = input.phone,
+                avatarUrl = input.avatarUrl,
+                preferredLanguage = input.preferredLanguage,
+                timezone = input.timezone
+            )
+            Result.success(withAuthRetry { api.updateAccountMe(payload).toModel() })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getAccountSessions(): Result<List<AccountSession>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getAccountSessions().map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun revokeAccountSession(sessionId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            withAuthRetry { api.revokeAccountSession(sessionId) }
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getLinkedIdentities(): Result<List<LinkedIdentity>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getLinkedIdentities().map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun requestMagicLink(email: String, shopId: String? = sessionManager.shopId()): Result<MagicLinkChallenge> = withContext(Dispatchers.IO) {
+        try {
+            val response = api.requestMagicLink(
+                MagicLinkRequestDto(
+                    email = email.trim(),
+                    shopId = shopId
+                )
+            )
+            Result.success(response.toModel())
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun verifyMagicLink(token: String, shopId: String? = sessionManager.shopId()): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val auth = api.verifyMagicLink(
+                MagicLinkVerifyRequestDto(
+                    token = token.trim(),
+                    shopId = shopId
+                )
+            )
+            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun loginWithGoogleIdToken(idToken: String, shopId: String? = sessionManager.shopId()): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val auth = api.loginWithGoogle(
+                GoogleMobileAuthRequest(
+                    idToken = idToken,
+                    shopId = shopId
+                )
+            )
+            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
     suspend fun getDashboardSummary(): DashboardSummary = withContext(Dispatchers.IO) {
         val today = LocalDate.now()
         val sales = db.salesDao().getAll()
@@ -124,6 +229,57 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         )
     }
 
+    suspend fun fetchReportPreview(
+        reportType: ReportType,
+        fromDateIso: String? = null,
+        toDateIso: String? = null
+    ): Result<ReportPreview> = withContext(Dispatchers.IO) {
+        try {
+            val preview = withAuthRetry {
+                when (reportType) {
+                    ReportType.Inventory -> api.getInventoryReport().toPreview()
+                    ReportType.Sales -> api.getSalesReport(fromDateIso, toDateIso).toPreview()
+                    ReportType.ProfitLoss -> api.getProfitLossReport(fromDateIso, toDateIso).toPreview()
+                    ReportType.Creditors -> api.getCreditorsReport(fromDateIso, toDateIso).toPreview()
+                }
+            }
+            Result.success(preview)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun exportReportFile(
+        reportType: ReportType,
+        format: ReportExportFormat,
+        fromDateIso: String? = null,
+        toDateIso: String? = null
+    ): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            val body = withAuthRetry {
+                api.exportReport(
+                    reportType.apiName,
+                    format.apiValue,
+                    fromDateIso,
+                    toDateIso
+                )
+            }
+
+            val extension = if (format == ReportExportFormat.Pdf) "pdf" else "csv"
+            val directory = File(appContext.cacheDir, "reports").apply { mkdirs() }
+            val filename = "${reportType.apiName}-${System.currentTimeMillis()}.$extension"
+            val file = File(directory, filename)
+            file.outputStream().use { out ->
+                body.byteStream().use { input ->
+                    input.copyTo(out)
+                }
+            }
+            Result.success(file)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
     suspend fun saveInventoryItem(input: NewInventoryInput): Result<InventoryItemEntity> = withContext(Dispatchers.IO) {
         try {
             val now = Instant.now().toString()
@@ -145,18 +301,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             )
             db.inventoryDao().upsert(localEntity)
 
-            val payload = CreateInventoryItemRequest(
-                productName = input.productName,
-                modelNumber = input.modelNumber,
-                serialNumber = input.serialNumber,
-                quantity = input.quantity,
-                expiryDate = input.expiryDateIso,
-                costPrice = input.costPrice,
-                sellingPrice = input.sellingPrice,
-                itemType = input.itemTypeCode,
-                conditionGrade = input.conditionGradeCode,
-                conditionNotes = input.conditionNotes
-            )
+            val payload = input.toInventoryCreateRequest()
 
             db.syncDao().enqueue(
                 SyncQueueEntity(
@@ -181,6 +326,82 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
 
             runSyncOnce()
             Result.success(localEntity)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun updateInventoryItem(itemId: String, input: NewInventoryInput): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val existing = db.inventoryDao().getById(itemId)
+                ?: return@withContext Result.failure(IllegalArgumentException("Inventory item not found."))
+
+            val now = Instant.now().toString()
+            val updated = existing.copy(
+                productName = input.productName,
+                modelNumber = input.modelNumber,
+                serialNumber = input.serialNumber,
+                quantity = input.quantity,
+                expiryDateIso = input.expiryDateIso,
+                costPrice = input.costPrice,
+                sellingPrice = input.sellingPrice,
+                itemType = input.itemTypeCode.toString(),
+                conditionGrade = input.conditionGradeCode?.toString(),
+                conditionNotes = input.conditionNotes,
+                updatedAtUtcIso = now
+            )
+            db.inventoryDao().upsert(updated)
+
+            val payload = input.toInventoryCreateRequest()
+            db.syncDao().deleteByEntityId(itemId)
+
+            val isUnsyncedLocal = existing.rowVersionBase64.isBlank()
+            val queueEntityName = if (isUnsyncedLocal) QueueEntity.InventoryCreate else QueueEntity.InventorySync
+            val queueOperation = if (isUnsyncedLocal) QueueOperation.Create else QueueOperation.Update
+
+            db.syncDao().enqueue(
+                SyncQueueEntity(
+                    entityName = queueEntityName,
+                    entityId = itemId,
+                    operation = queueOperation,
+                    payloadJson = inventoryCreateAdapter.toJson(payload),
+                    rowVersionBase64 = existing.rowVersionBase64.ifBlank { null },
+                    enqueuedAtUtcIso = now
+                )
+            )
+
+            runSyncOnce()
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun deleteInventoryItem(itemId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val existing = db.inventoryDao().getById(itemId)
+                ?: return@withContext Result.failure(IllegalArgumentException("Inventory item not found."))
+
+            val now = Instant.now().toString()
+            db.inventoryDao().deleteById(itemId)
+            db.pendingItemPhotoDao().deleteByLocalItem(itemId)
+            db.syncDao().deleteByEntityId(itemId)
+
+            if (existing.rowVersionBase64.isNotBlank()) {
+                db.syncDao().enqueue(
+                    SyncQueueEntity(
+                        entityName = QueueEntity.InventorySync,
+                        entityId = itemId,
+                        operation = QueueOperation.Delete,
+                        payloadJson = "{}",
+                        rowVersionBase64 = existing.rowVersionBase64,
+                        enqueuedAtUtcIso = now
+                    )
+                )
+            }
+
+            runSyncOnce()
+            Result.success(Unit)
         } catch (ex: Exception) {
             Result.failure(ex)
         }
@@ -276,10 +497,29 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
 
     suspend fun addCreditRepayment(input: CreditRepaymentInput): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            val amount = input.amount.coerceAtLeast(0.0)
+            require(amount > 0.0) { "Repayment amount must be greater than zero." }
+
+            val existingSale = db.salesDao().getById(input.saleId)
+                ?: return@withContext Result.failure(IllegalArgumentException("Credit sale not found."))
+            if (!existingSale.isCredit) {
+                return@withContext Result.failure(IllegalArgumentException("Selected sale is not a credit sale."))
+            }
+
+            val now = Instant.now().toString()
+            val newOutstanding = (existingSale.outstandingAmount - amount).coerceAtLeast(0.0)
+            db.salesDao().upsert(
+                existingSale.copy(
+                    outstandingAmount = newOutstanding,
+                    status = if (newOutstanding <= 0.0) "COMPLETED" else "PARTIALLY_PAID",
+                    updatedAtUtcIso = now
+                )
+            )
+
             val payload = CreditRepaymentEnvelope(
                 saleId = input.saleId,
                 request = CreditRepaymentRequest(
-                    amount = input.amount,
+                    amount = amount,
                     method = input.paymentMethodCode,
                     reference = input.reference,
                     notes = input.notes
@@ -293,7 +533,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     operation = QueueOperation.Create,
                     payloadJson = repaymentAdapter.toJson(payload),
                     rowVersionBase64 = null,
-                    enqueuedAtUtcIso = Instant.now().toString()
+                    enqueuedAtUtcIso = now
                 )
             )
 
@@ -612,6 +852,21 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         )
     }
 
+    private fun NewInventoryInput.toInventoryCreateRequest(): CreateInventoryItemRequest {
+        return CreateInventoryItemRequest(
+            productName = productName,
+            modelNumber = modelNumber,
+            serialNumber = serialNumber,
+            quantity = quantity,
+            expiryDate = expiryDateIso,
+            costPrice = costPrice,
+            sellingPrice = sellingPrice,
+            itemType = itemTypeCode,
+            conditionGrade = conditionGradeCode,
+            conditionNotes = conditionNotes
+        )
+    }
+
     private fun CreateSaleResponse.toEntity(request: CreateSaleRequest): SaleEntity {
         return SaleEntity(
             id = id,
@@ -650,6 +905,61 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         )
     }
 
+    private fun InventoryReportResponseDto.toPreview(): ReportPreview {
+        val lines = buildList {
+            add("Products: $totalProducts")
+            add("Units: $totalUnits")
+            add("Low Stock: $lowStockItems")
+            add("Cost Value: NGN ${"%.2f".format(totalCostValue)}")
+            add("Selling Value: NGN ${"%.2f".format(totalSellingValue)}")
+            add("")
+            items.take(20).forEach {
+                add("${it.productName} | Qty ${it.quantity} | Cost ${"%.2f".format(it.costPrice)} | Sell ${"%.2f".format(it.sellingPrice)}")
+            }
+        }
+        return ReportPreview("Inventory Report", lines)
+    }
+
+    private fun SalesReportResponseDto.toPreview(): ReportPreview {
+        val lines = buildList {
+            add("Range: ${fromUtc.take(10)} to ${toUtc.take(10)}")
+            add("Sales Count: $salesCount")
+            add("Revenue: NGN ${"%.2f".format(revenue)}")
+            add("VAT: NGN ${"%.2f".format(vatAmount)}")
+            add("Discount: NGN ${"%.2f".format(discountAmount)}")
+            add("Outstanding: NGN ${"%.2f".format(outstandingAmount)}")
+            add("")
+            daily.take(14).forEach {
+                add("${it.date.take(10)} | Sales ${it.salesCount} | Revenue ${"%.2f".format(it.revenue)}")
+            }
+        }
+        return ReportPreview("Sales Report", lines)
+    }
+
+    private fun ProfitLossReportResponseDto.toPreview(): ReportPreview {
+        val lines = listOf(
+            "Range: ${fromUtc.take(10)} to ${toUtc.take(10)}",
+            "Revenue: NGN ${"%.2f".format(revenue)}",
+            "COGS: NGN ${"%.2f".format(cogs)}",
+            "Gross Profit: NGN ${"%.2f".format(grossProfit)}",
+            "Expenses: NGN ${"%.2f".format(expenses)}",
+            "Net Profit/Loss: NGN ${"%.2f".format(netProfitLoss)}"
+        )
+        return ReportPreview("Profit & Loss", lines)
+    }
+
+    private fun CreditorsReportResponseDto.toPreview(): ReportPreview {
+        val lines = buildList {
+            add("Open Credits: $openCredits")
+            add("Total Outstanding: NGN ${"%.2f".format(totalOutstanding)}")
+            add("")
+            credits.take(20).forEach {
+                add("${it.customerName} | ${it.saleNumber} | Due ${it.dueDateUtc.take(10)} | Out ${"%.2f".format(it.outstandingAmount)}")
+            }
+        }
+        return ReportPreview("Creditors Report", lines)
+    }
+
     private fun normalizeSaleStatus(value: String): String {
         return when (value.trim().uppercase()) {
             "COMPLETED" -> "COMPLETED"
@@ -657,6 +967,53 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             "VOID" -> "VOID"
             else -> value.uppercase()
         }
+    }
+
+    private fun AccountProfileResponseDto.toModel(): AccountProfile {
+        return AccountProfile(
+            userId = userId,
+            fullName = fullName,
+            email = email,
+            phone = phone,
+            avatarUrl = avatarUrl,
+            preferredLanguage = preferredLanguage ?: "en",
+            timezone = timezone ?: "UTC",
+            createdAtUtc = createdAtUtc
+        )
+    }
+
+    private fun SessionViewDto.toModel(): AccountSession {
+        return AccountSession(
+            sessionId = sessionId,
+            shopId = shopId,
+            role = role,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            createdAtUtc = createdAtUtc,
+            expiresAtUtc = expiresAtUtc,
+            lastSeenAtUtc = lastSeenAtUtc,
+            isRevoked = isRevoked
+        )
+    }
+
+    private fun LinkedIdentityViewDto.toModel(): LinkedIdentity {
+        return LinkedIdentity(
+            provider = provider,
+            providerSubject = providerSubject,
+            email = email,
+            emailVerified = emailVerified,
+            createdAtUtc = createdAtUtc,
+            lastUsedAtUtc = lastUsedAtUtc
+        )
+    }
+
+    private fun MagicLinkRequestResponseDto.toModel(): MagicLinkChallenge {
+        return MagicLinkChallenge(
+            requestId = requestId,
+            expiresAtUtc = expiresAtUtc,
+            message = message,
+            debugToken = debugToken
+        )
     }
 
     companion object {
@@ -679,6 +1036,70 @@ data class DashboardSummary(
     val openConflicts: Int,
     val revenueLast7Days: List<Double>
 )
+
+data class AccountProfile(
+    val userId: String,
+    val fullName: String,
+    val email: String?,
+    val phone: String?,
+    val avatarUrl: String?,
+    val preferredLanguage: String,
+    val timezone: String,
+    val createdAtUtc: String
+)
+
+data class AccountProfileUpdateInput(
+    val fullName: String,
+    val phone: String?,
+    val avatarUrl: String?,
+    val preferredLanguage: String?,
+    val timezone: String?
+)
+
+data class AccountSession(
+    val sessionId: String,
+    val shopId: String,
+    val role: String,
+    val deviceId: String?,
+    val deviceName: String?,
+    val createdAtUtc: String,
+    val expiresAtUtc: String,
+    val lastSeenAtUtc: String?,
+    val isRevoked: Boolean
+)
+
+data class LinkedIdentity(
+    val provider: String,
+    val providerSubject: String,
+    val email: String?,
+    val emailVerified: Boolean,
+    val createdAtUtc: String,
+    val lastUsedAtUtc: String
+)
+
+data class MagicLinkChallenge(
+    val requestId: String,
+    val expiresAtUtc: String,
+    val message: String,
+    val debugToken: String?
+)
+
+data class ReportPreview(
+    val title: String,
+    val lines: List<String>
+)
+
+enum class ReportType(val apiName: String, val label: String) {
+    Inventory("inventory", "Inventory"),
+    Sales("sales", "Sales"),
+    ProfitLoss("profit-loss", "Profit & Loss"),
+    Creditors("creditors", "Creditors")
+}
+
+enum class ReportExportFormat(val apiValue: String, val label: String, val mimeType: String) {
+    Pdf("pdf", "PDF", "application/pdf"),
+    Spreadsheet("spreadsheet", "Spreadsheet", "text/csv")
+}
 
 data class NewInventoryInput(
     val productName: String,
@@ -757,6 +1178,7 @@ private object DefaultOwner {
 
 private object QueueEntity {
     const val InventoryCreate = "inventory.create"
+    const val InventorySync = "InventoryItem"
     const val SaleCreate = "sale.create"
     const val CreditRepaymentCreate = "credit.repayment.create"
 }

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Shopkeeper.Api.Contracts;
@@ -97,11 +98,20 @@ public static class ShopEndpoints
         Guid shopId,
         [FromBody] InviteStaffRequest request,
         ShopkeeperDbContext db,
+        TenantContextAccessor tenant,
+        UserManager<UserAccount> userManager,
+        HttpContext httpContext,
         CancellationToken ct)
     {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue || tenantId.Value != shopId)
+        {
+            return Results.Forbid();
+        }
+
         var user = await db.Users.FirstOrDefaultAsync(x =>
             (!string.IsNullOrWhiteSpace(request.Email) && x.Email == request.Email)
-            || (!string.IsNullOrWhiteSpace(request.Phone) && x.Phone == request.Phone), ct);
+            || (!string.IsNullOrWhiteSpace(request.Phone) && x.PhoneNumber == request.Phone), ct);
 
         if (user is null)
         {
@@ -109,12 +119,21 @@ public static class ShopEndpoints
             {
                 FullName = request.FullName,
                 Email = request.Email,
-                Phone = request.Phone,
-                PasswordHash = string.IsNullOrWhiteSpace(request.TemporaryPassword)
-                    ? string.Empty
-                    : new PasswordHasher().HashPassword(request.TemporaryPassword)
+                UserName = request.Email?.Trim().ToLowerInvariant() ?? $"phone_{request.Phone}",
+                PhoneNumber = request.Phone,
+                EmailConfirmed = !string.IsNullOrWhiteSpace(request.Email)
             };
-            db.Users.Add(user);
+
+            var createResult = string.IsNullOrWhiteSpace(request.TemporaryPassword)
+                ? await userManager.CreateAsync(user)
+                : await userManager.CreateAsync(user, request.TemporaryPassword);
+
+            if (!createResult.Succeeded)
+            {
+                return Results.ValidationProblem(createResult.Errors
+                    .GroupBy(x => x.Code)
+                    .ToDictionary(g => g.Key, g => g.Select(x => x.Description).ToArray()));
+            }
         }
 
         var existing = await db.ShopMemberships
@@ -143,8 +162,16 @@ public static class ShopEndpoints
         Guid shopId,
         Guid staffId,
         ShopkeeperDbContext db,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
         CancellationToken ct)
     {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue || tenantId.Value != shopId)
+        {
+            return Results.Forbid();
+        }
+
         var membership = await db.ShopMemberships
             .FirstOrDefaultAsync(x => x.ShopId == shopId && x.Id == staffId, ct);
 

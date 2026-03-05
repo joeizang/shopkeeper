@@ -43,6 +43,11 @@ public sealed class AuthTokenService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
+    public DateTime GetAccessTokenExpiryUtc()
+    {
+        return DateTime.UtcNow.AddMinutes(_options.AccessTokenMinutes);
+    }
+
     public (string token, string hash, DateTime expiresAtUtc) GenerateRefreshToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);

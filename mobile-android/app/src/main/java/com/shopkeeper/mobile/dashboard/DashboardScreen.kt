@@ -1,6 +1,7 @@
 package com.shopkeeper.mobile.dashboard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -39,7 +40,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 @Composable
-fun DashboardScreen() {
+fun DashboardScreen(onOpenProfile: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
@@ -85,13 +86,14 @@ fun DashboardScreen() {
                 modifier = Modifier
                     .size(42.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(MaterialTheme.colorScheme.primary)
+                    .clickable(onClick = onOpenProfile),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
                     "SO",
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.onPrimary
                 )
             }
         }

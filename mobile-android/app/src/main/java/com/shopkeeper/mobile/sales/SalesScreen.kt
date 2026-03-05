@@ -1,5 +1,6 @@
 package com.shopkeeper.mobile.sales
 
+import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +41,7 @@ import com.shopkeeper.mobile.receipts.ReceiptPdfGenerator
 import com.shopkeeper.mobile.receipts.shareReceiptPdf
 import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
+import com.shopkeeper.mobile.ui.components.DatePickerField
 import com.shopkeeper.mobile.ui.components.PaymentMethodDropdown
 import com.shopkeeper.mobile.ui.components.PaymentMethodOption
 import kotlinx.coroutines.launch
@@ -57,24 +61,27 @@ fun SalesScreen() {
     }
     val recognizer = remember { com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    var customerName by remember { mutableStateOf("") }
-    var customerPhone by remember { mutableStateOf("") }
-    var discount by remember { mutableStateOf("0") }
-    var paidAmount by remember { mutableStateOf("0") }
-    var paymentRef by remember { mutableStateOf("") }
-    var paymentMethod by remember { mutableStateOf(PaymentMethodOption.Cash) }
-    var dueDateUtc by remember { mutableStateOf("") }
-    var searchQuery by remember { mutableStateOf("") }
-    var selectedItemId by remember { mutableStateOf("") }
-    var selectedItemQuantity by remember { mutableStateOf("1") }
-    var saleLines by remember { mutableStateOf<List<UiSaleLine>>(emptyList()) }
-    var pendingScanAction by remember { mutableStateOf(SalesScanAction.Reference) }
+    var customerName by rememberSaveable { mutableStateOf("") }
+    var customerPhone by rememberSaveable { mutableStateOf("") }
+    var discount by rememberSaveable { mutableStateOf("0") }
+    var paidAmount by rememberSaveable { mutableStateOf("0") }
+    var paymentRef by rememberSaveable { mutableStateOf("") }
+    var paymentMethodCode by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
+    val paymentMethod = PaymentMethodOption.fromCode(paymentMethodCode)
+    var dueDateUtc by rememberSaveable { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var selectedItemId by rememberSaveable { mutableStateOf("") }
+    var selectedItemQuantity by rememberSaveable { mutableStateOf("1") }
+    var saleLines by rememberSaveable(stateSaver = UiSaleLinesSaver) { mutableStateOf<List<UiSaleLine>>(emptyList()) }
+    var pendingScanActionName by rememberSaveable { mutableStateOf(SalesScanAction.Reference.name) }
+    val pendingScanAction = runCatching { SalesScanAction.valueOf(pendingScanActionName) }
+        .getOrDefault(SalesScanAction.Reference)
 
     var inventory by remember { mutableStateOf<List<InventoryItemEntity>>(emptyList()) }
     var todayCompletedSales by remember { mutableStateOf<List<SaleEntity>>(emptyList()) }
-    var status by remember { mutableStateOf("") }
+    var status by rememberSaveable { mutableStateOf("") }
     var lastSale by remember { mutableStateOf<RecordedSale?>(null) }
-    var isCreatingSale by remember { mutableStateOf(false) }
+    var isCreatingSale by rememberSaveable { mutableStateOf(false) }
 
     fun refreshSummary() {
         scope.launch {
@@ -149,7 +156,7 @@ fun SalesScreen() {
     }
 
     fun launchScan(action: SalesScanAction) {
-        pendingScanAction = action
+        pendingScanActionName = action.name
         val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
             context,
             android.Manifest.permission.CAMERA
@@ -435,7 +442,7 @@ fun SalesScreen() {
 
             PaymentMethodDropdown(
                 selected = paymentMethod,
-                onSelected = { paymentMethod = it },
+                onSelected = { paymentMethodCode = it.code },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -453,10 +460,10 @@ fun SalesScreen() {
                 )
             }
 
-            OutlinedTextField(
+            DatePickerField(
+                label = "Due Date (optional, for credit sale)",
                 value = dueDateUtc,
                 onValueChange = { dueDateUtc = it },
-                label = { Text("Due Date UTC ISO (optional, credit)") },
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -486,7 +493,7 @@ fun SalesScreen() {
                                 customerName = customerName.ifBlank { null },
                                 customerPhone = customerPhone.ifBlank { null },
                                 isCredit = dueDateUtc.isNotBlank(),
-                                dueDateUtcIso = dueDateUtc.ifBlank { null }
+                                dueDateUtcIso = dueDateUtc.ifBlank { null }?.let { "${it}T00:00:00Z" }
                             )
 
                             val result = gateway.recordSale(input)
@@ -552,6 +559,34 @@ private data class UiSaleLine(
     val productName: String,
     val quantity: Int,
     val unitPrice: Double
+)
+
+private val UiSaleLinesSaver = listSaver<List<UiSaleLine>, String>(
+    save = { lines ->
+        lines.map { line ->
+            listOf(
+                line.inventoryItemId,
+                Uri.encode(line.productName),
+                line.quantity.toString(),
+                line.unitPrice.toString()
+            ).joinToString("::")
+        }
+    },
+    restore = { encoded ->
+        encoded.mapNotNull { raw ->
+            val parts = raw.split("::")
+            if (parts.size != 4) {
+                null
+            } else {
+                UiSaleLine(
+                    inventoryItemId = parts[0],
+                    productName = Uri.decode(parts[1]),
+                    quantity = parts[2].toIntOrNull() ?: 1,
+                    unitPrice = parts[3].toDoubleOrNull() ?: 0.0
+                )
+            }
+        }
+    }
 )
 
 private fun extractReferenceText(text: String): String {
