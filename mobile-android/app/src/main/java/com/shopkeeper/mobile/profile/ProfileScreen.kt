@@ -5,8 +5,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,7 +18,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.AccountProfileUpdateInput
 import com.shopkeeper.mobile.core.data.AccountSession
@@ -28,6 +25,11 @@ import com.shopkeeper.mobile.core.data.LinkedIdentity
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
+import com.shopkeeper.mobile.ui.components.ScreenColumn
+import com.shopkeeper.mobile.ui.components.ScreenHeader
+import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SoftButton
+import com.shopkeeper.mobile.ui.components.StatusBanner
 import kotlinx.coroutines.launch
 
 @Composable
@@ -86,16 +88,10 @@ fun ProfileScreen() {
         loadProfileData()
     }
 
-    Column(
-        modifier = Modifier
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text(
-            "Profile & Account",
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onBackground
+    ScreenColumn {
+        ScreenHeader(
+            title = "Account",
+            subtitle = "Manage profile details, linked sign-in methods, and active sessions."
         )
 
         AccentCard(modifier = Modifier.fillMaxWidth()) {
@@ -103,7 +99,7 @@ fun ProfileScreen() {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("Account Details", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                SectionTitle("Profile details")
                 OutlinedTextField(
                     value = fullName,
                     onValueChange = { fullName = it },
@@ -177,7 +173,7 @@ fun ProfileScreen() {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Linked Sign-in Methods", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                SectionTitle("Linked sign-in methods")
                 if (identities.isEmpty()) {
                     Text("No linked identities yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
@@ -196,7 +192,10 @@ fun ProfileScreen() {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Magic Link Plumbing", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                SectionTitle(
+                    title = "Magic link",
+                    subtitle = "Request a sign-in link and verify it manually during development."
+                )
                 OutlinedTextField(
                     value = magicEmail,
                     onValueChange = { magicEmail = it },
@@ -220,7 +219,7 @@ fun ProfileScreen() {
                         },
                         modifier = Modifier.weight(1f)
                     )
-                    BrickButton(
+                    SoftButton(
                         text = "Refresh",
                         onClick = { loadProfileData() },
                         modifier = Modifier.weight(1f)
@@ -263,7 +262,10 @@ fun ProfileScreen() {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Google Plumbing", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                SectionTitle(
+                    title = "Google sign-in",
+                    subtitle = "Paste an ID token to test the mobile auth endpoint."
+                )
                 OutlinedTextField(
                     value = googleIdToken,
                     onValueChange = { googleIdToken = it },
@@ -294,7 +296,7 @@ fun ProfileScreen() {
                 modifier = Modifier.padding(16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Active Sessions", fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                SectionTitle("Active sessions")
                 if (sessions.isEmpty()) {
                     Text("No sessions recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
@@ -315,7 +317,7 @@ fun ProfileScreen() {
                                 )
                             }
                             if (!session.isRevoked) {
-                                BrickButton(
+                                SoftButton(
                                     text = "Revoke",
                                     onClick = {
                                         scope.launch {
@@ -337,8 +339,6 @@ fun ProfileScreen() {
             }
         }
 
-        if (status.isNotBlank()) {
-            Text(status, color = MaterialTheme.colorScheme.secondary)
-        }
+        StatusBanner(status)
     }
 }

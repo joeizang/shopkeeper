@@ -7,6 +7,14 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
+val apiBaseUrl = (
+    project.findProperty("shopkeeper.apiBaseUrl") as String?
+        ?: System.getenv("SHOPKEEPER_API_BASE_URL")
+        ?: "http://192.168.0.189:5057/"
+    ).let { raw ->
+        if (raw.endsWith("/")) raw else "$raw/"
+    }
+
 android {
     namespace = "com.shopkeeper.mobile"
     compileSdk = 35
@@ -19,7 +27,7 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "API_BASE_URL", "\"http://192.168.0.189:5057\"")
+        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
     }
 
     buildTypes {

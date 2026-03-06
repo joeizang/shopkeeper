@@ -3,12 +3,8 @@ package com.shopkeeper.mobile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +25,12 @@ import com.shopkeeper.mobile.receipts.shareReportFile
 import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.DatePickerField
+import com.shopkeeper.mobile.ui.components.ScreenColumn
+import com.shopkeeper.mobile.ui.components.ScreenHeader
+import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SelectionPill
+import com.shopkeeper.mobile.ui.components.SoftButton
+import com.shopkeeper.mobile.ui.components.StatusBanner
 import kotlinx.coroutines.launch
 
 @Composable
@@ -81,40 +83,42 @@ fun ReportsScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text("Reports", style = MaterialTheme.typography.titleLarge)
-        Text("Preview and export inventory, sales, P&L, and creditors reports.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    ScreenColumn {
+        ScreenHeader(
+            title = "Reports",
+            subtitle = "Preview and export inventory, sales, profit, and credit reports."
+        )
 
+        SectionTitle(
+            title = "Report type",
+            subtitle = "Choose what you want to preview or export."
+        )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ReportType.values().take(2).forEach { type ->
-                Button(
+                SelectionPill(
+                    text = type.label,
+                    selected = selectedType == type,
                     onClick = { selectedTypeName = type.name },
                     modifier = Modifier.weight(1f)
-                ) {
-                    Text(type.label)
-                }
+                )
             }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             ReportType.values().drop(2).forEach { type ->
-                Button(
+                SelectionPill(
+                    text = type.label,
+                    selected = selectedType == type,
                     onClick = { selectedTypeName = type.name },
                     modifier = Modifier.weight(1f)
-                ) {
-                    Text(type.label)
-                }
+                )
             }
         }
 
-        Text("Selected: ${selectedType.label}", color = MaterialTheme.colorScheme.secondary)
-
         if (showDateRange) {
+            SectionTitle(
+                title = "Date range",
+                subtitle = "Leave blank to use the server defaults."
+            )
             DatePickerField(
                 label = "From Date (optional)",
                 value = fromDate,
@@ -136,12 +140,12 @@ fun ReportsScreen() {
         )
 
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            BrickButton(
+            SoftButton(
                 text = "Export PDF",
                 onClick = { if (!isLoading) export(ReportExportFormat.Pdf) },
                 modifier = Modifier.weight(1f)
             )
-            BrickButton(
+            SoftButton(
                 text = "Export Spreadsheet",
                 onClick = { if (!isLoading) export(ReportExportFormat.Spreadsheet) },
                 modifier = Modifier.weight(1f)
@@ -149,21 +153,22 @@ fun ReportsScreen() {
         }
 
         preview?.let { report ->
+            SectionTitle(
+                title = report.title,
+                subtitle = "Preview"
+            )
             AccentCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
+                    modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(report.title, style = MaterialTheme.typography.titleMedium)
                     report.lines.forEach { line ->
-                        Text(line, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(line, color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
         }
 
-        if (status.isNotBlank()) {
-            Text(status, color = MaterialTheme.colorScheme.secondary)
-        }
+        StatusBanner(status)
     }
 }

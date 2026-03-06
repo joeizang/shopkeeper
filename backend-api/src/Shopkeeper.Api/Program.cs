@@ -26,6 +26,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.Sources.Clear();
 builder.Configuration.AddEnvironmentVariables();
 
+var httpsRedirectionEnabled = builder.Configuration.GetValue<bool?>("App:HttpsRedirectionEnabled")
+    ?? !builder.Environment.IsDevelopment();
+
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -118,7 +121,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-if (!app.Environment.IsEnvironment("Testing"))
+if (!app.Environment.IsEnvironment("Testing") && httpsRedirectionEnabled)
 {
     app.UseHttpsRedirection();
 }
@@ -136,6 +139,7 @@ using (var scope = app.Services.CreateScope())
     }
     else
     {
+        await LegacySqliteMigrationBootstrapper.BootstrapAsync(db);
         await db.Database.MigrateAsync();
     }
 

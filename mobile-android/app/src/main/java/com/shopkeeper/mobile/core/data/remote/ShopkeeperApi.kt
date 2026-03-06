@@ -60,6 +60,9 @@ interface ShopkeeperApi {
         @Body body: CreditRepaymentRequest
     ): Map<String, Any>
 
+    @GET("/api/v1/credits/{saleId}")
+    suspend fun getCreditDetails(@Path("saleId") saleId: String): CreditDetailResponseDto
+
     @POST("/api/v1/sync/push")
     suspend fun pushChanges(@Body body: SyncPushRequest): SyncPushResponse
 

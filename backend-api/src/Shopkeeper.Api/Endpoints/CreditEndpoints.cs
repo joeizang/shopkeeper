@@ -62,6 +62,7 @@ public static class CreditEndpoints
 
         var credit = await db.CreditAccounts
             .Include(x => x.Repayments)
+                .ThenInclude(x => x.SalePayment)
             .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.SaleId == saleId, ct);
 
         if (credit is null)
@@ -69,11 +70,18 @@ public static class CreditEndpoints
             return Results.NotFound();
         }
 
-        return Results.Ok(new
-        {
-            account = new CreditAccountView(credit.Id, credit.SaleId, credit.DueDateUtc, credit.OutstandingAmount, credit.Status),
-            repayments = credit.Repayments.Select(r => new { r.Id, r.Amount, r.Notes, r.CreatedAtUtc })
-        });
+        return Results.Ok(new CreditDetailResponse(
+            new CreditAccountView(credit.Id, credit.SaleId, credit.DueDateUtc, credit.OutstandingAmount, credit.Status),
+            credit.Repayments
+                .OrderByDescending(r => r.CreatedAtUtc)
+                .Select(r => new CreditRepaymentView(
+                    r.Id,
+                    r.Amount,
+                    r.SalePayment.Method,
+                    r.SalePayment.Reference,
+                    r.Notes,
+                    r.CreatedAtUtc))
+                .ToList()));
     }
 
     private static async Task<IResult> AddRepayment(

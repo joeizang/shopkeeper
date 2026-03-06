@@ -155,6 +155,28 @@ data class CreditRepaymentRequest(
     val notes: String?
 )
 
+data class CreditAccountViewDto(
+    val id: String,
+    val saleId: String,
+    val dueDateUtc: String,
+    val outstandingAmount: Double,
+    val status: String
+)
+
+data class CreditRepaymentViewDto(
+    val id: String,
+    val amount: Double,
+    val method: Int,
+    val reference: String?,
+    val notes: String?,
+    val createdAtUtc: String
+)
+
+data class CreditDetailResponseDto(
+    val account: CreditAccountViewDto,
+    val repayments: List<CreditRepaymentViewDto>
+)
+
 data class SyncPushChange(
     val deviceId: String,
     val entityName: String,

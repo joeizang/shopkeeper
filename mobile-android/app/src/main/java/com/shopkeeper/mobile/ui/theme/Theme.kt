@@ -28,23 +28,40 @@ private val AppColorScheme = darkColorScheme(
 )
 
 private val AppTypography = Typography(
-    headlineMedium = TextStyle(
+    headlineLarge = TextStyle(
         fontWeight = FontWeight.Bold,
-        fontSize = 34.sp,
-        letterSpacing = (-0.5).sp
+        fontSize = 28.sp,
+        letterSpacing = (-0.3).sp
+    ),
+    headlineMedium = TextStyle(
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 24.sp,
+        letterSpacing = (-0.3).sp
     ),
     titleLarge = TextStyle(
         fontWeight = FontWeight.SemiBold,
-        fontSize = 22.sp,
+        fontSize = 20.sp,
         letterSpacing = (-0.2).sp
     ),
     titleMedium = TextStyle(
         fontWeight = FontWeight.SemiBold,
-        fontSize = 18.sp
+        fontSize = 17.sp
     ),
     bodyLarge = TextStyle(
         fontSize = 16.sp,
         lineHeight = 22.sp
+    ),
+    bodyMedium = TextStyle(
+        fontSize = 14.sp,
+        lineHeight = 20.sp
+    ),
+    bodySmall = TextStyle(
+        fontSize = 13.sp,
+        lineHeight = 18.sp
+    ),
+    labelSmall = TextStyle(
+        fontWeight = FontWeight.Medium,
+        fontSize = 12.sp
     ),
     labelLarge = TextStyle(
         fontWeight = FontWeight.SemiBold,
@@ -53,10 +70,10 @@ private val AppTypography = Typography(
 )
 
 private val AppShapes = Shapes(
-    small = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
-    medium = androidx.compose.foundation.shape.RoundedCornerShape(18.dp),
-    large = androidx.compose.foundation.shape.RoundedCornerShape(24.dp),
-    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(30.dp)
+    small = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(10.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
 )
 
 @Composable

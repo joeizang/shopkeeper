@@ -16,6 +16,8 @@ import com.shopkeeper.mobile.core.data.remote.CreateInventoryItemRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleResponse
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentRequest
+import com.shopkeeper.mobile.core.data.remote.CreditDetailResponseDto
+import com.shopkeeper.mobile.core.data.remote.CreditRepaymentViewDto
 import com.shopkeeper.mobile.core.data.remote.GoogleMobileAuthRequest
 import com.shopkeeper.mobile.core.data.remote.InventoryItemResponse
 import com.shopkeeper.mobile.core.data.remote.InventoryReportResponseDto
@@ -101,6 +103,14 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     outstandingAmount = it.outstandingAmount
                 )
             }
+    }
+
+    suspend fun getCreditDetail(saleId: String): Result<CreditDetail> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getCreditDetails(saleId).toModel() })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
     }
 
     fun isOwnerSession(): Boolean {
@@ -1016,6 +1026,25 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         )
     }
 
+    private fun CreditDetailResponseDto.toModel(): CreditDetail {
+        return CreditDetail(
+            saleId = account.saleId,
+            outstandingAmount = account.outstandingAmount,
+            repayments = repayments.map { it.toModel() }
+        )
+    }
+
+    private fun CreditRepaymentViewDto.toModel(): CreditRepaymentRecord {
+        return CreditRepaymentRecord(
+            repaymentId = id,
+            amount = amount,
+            paymentMethodCode = method,
+            reference = reference,
+            notes = notes,
+            createdAtUtc = createdAtUtc
+        )
+    }
+
     companion object {
         @Volatile
         private var instance: ShopkeeperDataGateway? = null
@@ -1156,6 +1185,21 @@ data class CreditSaleOption(
     val customerName: String,
     val itemSummary: String,
     val outstandingAmount: Double
+)
+
+data class CreditDetail(
+    val saleId: String,
+    val outstandingAmount: Double,
+    val repayments: List<CreditRepaymentRecord>
+)
+
+data class CreditRepaymentRecord(
+    val repaymentId: String,
+    val amount: Double,
+    val paymentMethodCode: Int,
+    val reference: String?,
+    val notes: String?,
+    val createdAtUtc: String
 )
 
 data class SyncRunSummary(

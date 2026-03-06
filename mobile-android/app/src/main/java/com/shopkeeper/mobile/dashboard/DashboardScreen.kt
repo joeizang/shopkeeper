@@ -11,10 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,7 +30,12 @@ import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.DashboardSummary
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.ui.components.AccentCard
-import com.shopkeeper.mobile.ui.components.BrickButton
+import com.shopkeeper.mobile.ui.components.MetricCard
+import com.shopkeeper.mobile.ui.components.ScreenColumn
+import com.shopkeeper.mobile.ui.components.ScreenHeader
+import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SoftButton
+import com.shopkeeper.mobile.ui.components.StatusBanner
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.TextStyle
@@ -63,122 +65,82 @@ fun DashboardScreen(onOpenProfile: () -> Unit = {}) {
 
     LaunchedEffect(Unit) { refresh() }
 
-    Column(
-        modifier = Modifier
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    "Hello, Shop Owner",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text("Dashboard overview", color = MaterialTheme.colorScheme.secondary)
+    ScreenColumn {
+        ScreenHeader(
+            title = "Dashboard",
+            subtitle = "Sales, stock, and sync status for today.",
+            trailing = {
+                Box(
+                    modifier = Modifier
+                        .size(42.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                        .clickable(onClick = onOpenProfile),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "SO",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
             }
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable(onClick = onOpenProfile),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "SO",
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimary
-                )
-            }
-        }
+        )
 
         summary?.let {
-            BalanceCard(summary = it, onRefresh = { refresh() })
+            SummarySection(summary = it, onRefresh = { refresh() })
             RevenueCard(summary = it)
         }
 
-        if (status.isNotBlank()) {
-            Text(status, color = MaterialTheme.colorScheme.secondary)
-        }
+        StatusBanner(status)
     }
 }
 
 @Composable
-private fun BalanceCard(summary: DashboardSummary, onRefresh: () -> Unit) {
-    AccentCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
-            Text("Total Balance", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                "NGN ${"%,.2f".format(summary.todayRevenue)}",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                HighlightTile(
-                    title = "Total Inventory",
-                    value = summary.inventoryItems.toString(),
-                    container = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f),
-                    valueColor = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f)
-                )
-                HighlightTile(
-                    title = "Conflicts",
-                    value = summary.openConflicts.toString(),
-                    container = MaterialTheme.colorScheme.secondary.copy(alpha = 0.16f),
-                    valueColor = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-
-            Text(
-                "Today Sales: ${summary.todayCompletedSalesCount}",
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-
-            BrickButton(
-                text = "Refresh Summary",
-                onClick = onRefresh,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-    }
-}
-
-@Composable
-private fun HighlightTile(
-    title: String,
-    value: String,
-    container: androidx.compose.ui.graphics.Color,
-    valueColor: androidx.compose.ui.graphics.Color,
-    modifier: Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(18.dp))
-            .background(container)
+private fun SummarySection(summary: DashboardSummary, onRefresh: () -> Unit) {
+    SectionTitle(
+        title = "Today",
+        subtitle = "Current balance, completed sales, inventory, and conflicts."
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(vertical = 12.dp, horizontal = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                title,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.labelSmall
-            )
-            Text(value, color = valueColor, style = MaterialTheme.typography.titleLarge)
-        }
+        MetricCard(
+            title = "Revenue",
+            value = "NGN ${"%,.2f".format(summary.todayRevenue)}",
+            supporting = "${summary.todayCompletedSalesCount} completed sales",
+            modifier = Modifier.weight(1f)
+        )
+        MetricCard(
+            title = "Inventory",
+            value = summary.inventoryItems.toString(),
+            supporting = "${summary.lowStockItems} low stock",
+            modifier = Modifier.weight(1f)
+        )
     }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        MetricCard(
+            title = "Conflicts",
+            value = summary.openConflicts.toString(),
+            supporting = if (summary.openConflicts == 0) "No sync issues" else "Needs review",
+            modifier = Modifier.weight(1f)
+        )
+        MetricCard(
+            title = "Sales Count",
+            value = summary.todayCompletedSalesCount.toString(),
+            supporting = "Updated from local records",
+            modifier = Modifier.weight(1f)
+        )
+    }
+    SoftButton(
+        text = "Refresh Summary",
+        onClick = onRefresh,
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 @Composable
@@ -187,15 +149,14 @@ private fun RevenueCard(summary: DashboardSummary) {
     val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
     val startDate = LocalDate.now().minusDays((values.size - 1).toLong())
 
+    SectionTitle(
+        title = "Revenue trend",
+        subtitle = "Last 7 days"
+    )
     AccentCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(
-                "7-Day Revenue",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-            Text(
-                "Low Stock Items: ${summary.lowStockItems}",
+                "Low stock items: ${summary.lowStockItems}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Row(

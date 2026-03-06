@@ -4,11 +4,8 @@ import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Share
@@ -42,8 +39,14 @@ import com.shopkeeper.mobile.receipts.shareReceiptPdf
 import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.DatePickerField
+import com.shopkeeper.mobile.ui.components.MetricCard
 import com.shopkeeper.mobile.ui.components.PaymentMethodDropdown
 import com.shopkeeper.mobile.ui.components.PaymentMethodOption
+import com.shopkeeper.mobile.ui.components.ScreenColumn
+import com.shopkeeper.mobile.ui.components.ScreenHeader
+import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SoftButton
+import com.shopkeeper.mobile.ui.components.StatusBanner
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
@@ -190,22 +193,28 @@ fun SalesScreen() {
     val discountAmount = discount.toDoubleOrNull() ?: 0.0
     val totalAmount = (subtotal - discountAmount).coerceAtLeast(0.0)
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+    ScreenColumn {
+        ScreenHeader(
+            title = "Sales",
+            subtitle = if (isCreatingSale) {
+                "Build the sale from inventory items, then record payment or credit."
+            } else {
+                "Review today’s completed sales and issue receipts."
+            }
+        )
+
         if (!isCreatingSale) {
-            Text("Today's Sales", style = MaterialTheme.typography.titleLarge)
+            SectionTitle(
+                title = "Today",
+                subtitle = "Completed sales and current revenue."
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                SummaryCard("Completed", todayCompletedSales.size.toString(), Modifier.weight(1f))
-                SummaryCard(
+                MetricCard("Completed", todayCompletedSales.size.toString(), Modifier.weight(1f))
+                MetricCard(
                     "Revenue",
                     "NGN ${"%.2f".format(todayCompletedSales.sumOf { it.totalAmount })}",
                     Modifier.weight(1f)
@@ -225,6 +234,7 @@ fun SalesScreen() {
             if (todayCompletedSales.isEmpty()) {
                 Text("No completed sales yet today.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
+                SectionTitle(title = "Completed sales")
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     todayCompletedSales.take(20).forEach { sale ->
                         AccentCard(modifier = Modifier.fillMaxWidth()) {
@@ -268,7 +278,10 @@ fun SalesScreen() {
                 )
             }
         } else {
-            Text("Create Sale", style = MaterialTheme.typography.titleLarge)
+            SectionTitle(
+                title = "Create sale",
+                subtitle = "Search inventory, add one or more line items, then record payment details."
+            )
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -297,6 +310,12 @@ fun SalesScreen() {
                 )
             }
 
+            SoftButton(
+                text = "Back To Summary",
+                onClick = { isCreatingSale = false },
+                modifier = Modifier.fillMaxWidth()
+            )
+
             OutlinedTextField(
                 value = customerName,
                 onValueChange = { customerName = it },
@@ -318,7 +337,10 @@ fun SalesScreen() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Text("Select item from inventory", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SectionTitle(
+                title = "Inventory items",
+                subtitle = "Search by name, model, or serial number, then add the selected quantity."
+            )
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 filteredInventory.take(25).forEach { item ->
                     AccentCard(modifier = Modifier.fillMaxWidth()) {
@@ -335,12 +357,13 @@ fun SalesScreen() {
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            Button(onClick = {
-                                selectedItemId = item.id
-                                selectedItemQuantity = "1"
-                            }) {
-                                Text("Pick")
-                            }
+                            SoftButton(
+                                text = "Pick",
+                                onClick = {
+                                    selectedItemId = item.id
+                                    selectedItemQuantity = "1"
+                                }
+                            )
                         }
                     }
                 }
@@ -375,7 +398,7 @@ fun SalesScreen() {
             if (saleLines.isEmpty()) {
                 Text("No line items yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                Text("Sale Line Items", style = MaterialTheme.typography.titleMedium)
+                SectionTitle(title = "Sale line items")
                 saleLines.forEach { line ->
                     AccentCard(modifier = Modifier.fillMaxWidth()) {
                         Row(
@@ -406,18 +429,20 @@ fun SalesScreen() {
                                 label = { Text("Qty") },
                                 modifier = Modifier.weight(1f)
                             )
-                            Button(onClick = {
-                                saleLines = saleLines.filterNot { it.inventoryItemId == line.inventoryItemId }
-                            }) {
-                                Text("Remove")
-                            }
+                            SoftButton(
+                                text = "Remove",
+                                onClick = {
+                                    saleLines = saleLines.filterNot { it.inventoryItemId == line.inventoryItemId }
+                                }
+                            )
                         }
                     }
                 }
             }
 
-            SummaryCard("Subtotal", "NGN ${"%.2f".format(subtotal)}", Modifier.fillMaxWidth())
-            SummaryCard("Total", "NGN ${"%.2f".format(totalAmount)}", Modifier.fillMaxWidth())
+            SectionTitle(title = "Totals")
+            MetricCard("Subtotal", "NGN ${"%.2f".format(subtotal)}", Modifier.fillMaxWidth())
+            MetricCard("Total", "NGN ${"%.2f".format(totalAmount)}", Modifier.fillMaxWidth())
 
             OutlinedTextField(
                 value = discount,
@@ -515,29 +540,11 @@ fun SalesScreen() {
                     modifier = Modifier.weight(1f)
                 )
 
-                Button(onClick = { isCreatingSale = false }, modifier = Modifier.weight(1f)) {
-                    Text("Cancel")
-                }
+                SoftButton(text = "Cancel", onClick = { isCreatingSale = false }, modifier = Modifier.weight(1f))
             }
         }
 
-        if (status.isNotBlank()) {
-            Text(status, color = MaterialTheme.colorScheme.secondary)
-        }
-    }
-}
-
-@Composable
-private fun SummaryCard(title: String, value: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
-    ) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, color = MaterialTheme.colorScheme.secondary)
-        }
+        StatusBanner(status)
     }
 }
 

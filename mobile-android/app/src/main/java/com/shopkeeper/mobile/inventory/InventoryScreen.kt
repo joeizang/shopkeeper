@@ -9,11 +9,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.TextButton
@@ -38,10 +36,17 @@ import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.shopkeeper.mobile.core.data.NewInventoryInput
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
+import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.ConditionGradeDropdown
 import com.shopkeeper.mobile.ui.components.ConditionGradeOption
 import com.shopkeeper.mobile.ui.components.DatePickerField
+import com.shopkeeper.mobile.ui.components.MetricCard
+import com.shopkeeper.mobile.ui.components.ScreenColumn
+import com.shopkeeper.mobile.ui.components.ScreenHeader
+import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SoftButton
+import com.shopkeeper.mobile.ui.components.StatusBanner
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -145,30 +150,40 @@ fun InventoryScreen() {
         }
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+    ScreenColumn {
+        ScreenHeader(
+            title = "Inventory",
+            subtitle = if (isAddingItem) {
+                if (editingItemId.isNotBlank()) "Review item details and update stock information." else "Capture details, review them, and save the item."
+            } else {
+                "Track stock levels, worth, and item condition."
+            }
+        )
+
         if (!isAddingItem) {
             val totalProducts = inventoryItems.size
             val totalUnits = inventoryItems.sumOf { it.quantity }
             val totalWorth = inventoryItems.sumOf { it.costPrice * it.quantity }
             val lowStockItems = inventoryItems.count { it.quantity <= 2 }
 
-            Text("Inventory Summary", style = MaterialTheme.typography.titleLarge)
+            SectionTitle(
+                title = "Stock summary",
+                subtitle = "Current inventory position from local records."
+            )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                InventoryMetricCard("Products", totalProducts.toString(), Modifier.weight(1f))
-                InventoryMetricCard("Units", totalUnits.toString(), Modifier.weight(1f))
+                MetricCard("Products", totalProducts.toString(), Modifier.weight(1f))
+                MetricCard("Units", totalUnits.toString(), Modifier.weight(1f))
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                InventoryMetricCard("Stock Worth", "NGN ${"%.2f".format(totalWorth)}", Modifier.weight(1f))
-                InventoryMetricCard("Low Stock", lowStockItems.toString(), Modifier.weight(1f))
+                MetricCard("Stock Worth", "NGN ${"%.2f".format(totalWorth)}", Modifier.weight(1f))
+                MetricCard("Low Stock", lowStockItems.toString(), Modifier.weight(1f))
             }
 
+            SectionTitle(
+                title = "Products",
+                subtitle = "Search by product name, serial number, or model number."
+            )
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
@@ -180,18 +195,30 @@ fun InventoryScreen() {
                 Text("No inventory items found.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
                 filteredItems.take(40).forEach { item ->
-                    com.shopkeeper.mobile.ui.components.AccentCard(modifier = Modifier.fillMaxWidth()) {
+                    AccentCard(modifier = Modifier.fillMaxWidth()) {
                         Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                            modifier = Modifier.padding(14.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Text(item.productName, color = MaterialTheme.colorScheme.onBackground)
+                            Text(item.productName, color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 "Qty: ${item.quantity} • Cost: NGN ${"%.2f".format(item.costPrice)} • Sell: NGN ${"%.2f".format(item.sellingPrice)}",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            val details = listOfNotNull(
+                                item.modelNumber?.takeIf { it.isNotBlank() }?.let { "Model: $it" },
+                                item.serialNumber?.takeIf { it.isNotBlank() }?.let { "Serial: $it" },
+                                item.expiryDateIso?.takeIf { it.isNotBlank() }?.let { "Expiry: ${it.take(10)}" }
+                            )
+                            if (details.isNotEmpty()) {
+                                Text(
+                                    details.joinToString(" • "),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
+                                SoftButton(
                                     onClick = {
                                         editingItemId = item.id
                                         isAddingItem = true
@@ -207,11 +234,11 @@ fun InventoryScreen() {
                                         isUsed = item.itemType == "2"
                                         capturedPhotoUris = emptyList()
                                         status = "Editing ${item.productName}"
-                                    }
-                                ) {
-                                    Text("Edit")
-                                }
-                                Button(onClick = { pendingDeleteItemId = item.id }) {
+                                    },
+                                    text = "Edit",
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Button(onClick = { pendingDeleteItemId = item.id }, modifier = Modifier.weight(1f)) {
                                     Text("Delete")
                                 }
                             }
@@ -249,21 +276,23 @@ fun InventoryScreen() {
             }
 
             val isEditing = editingItemId.isNotBlank()
-            Text(
-                if (isEditing) "Edit Inventory Item" else "Add Inventory Item",
-                style = MaterialTheme.typography.titleLarge
+            SectionTitle(
+                title = if (isEditing) "Edit item" else "Add item",
+                subtitle = "Camera capture is optional. Review and edit all values before saving."
             )
-            BrickButton(
-                text = "Back To Summary",
-                onClick = { isAddingItem = false },
-                modifier = Modifier.fillMaxWidth()
-            )
-            BrickButton(
-                text = "Scan With Camera",
-                onClick = { launchCameraAction(CameraAction.ScanText) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            BrickButton(
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SoftButton(
+                    text = "Back To Summary",
+                    onClick = { isAddingItem = false },
+                    modifier = Modifier.weight(1f)
+                )
+                SoftButton(
+                    text = "Scan Details",
+                    onClick = { launchCameraAction(CameraAction.ScanText) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            SoftButton(
                 text = "Capture Item Photo",
                 onClick = { launchCameraAction(CameraAction.CapturePhoto) },
                 modifier = Modifier.fillMaxWidth()
@@ -272,8 +301,9 @@ fun InventoryScreen() {
                 "Captured photos: ${capturedPhotoUris.size}",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Text("Review OCR result before save", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            StatusBanner("Review OCR results before saving. Camera capture never saves directly.")
 
+            SectionTitle(title = "Identifiers")
             OutlinedTextField(
                 value = extractedModel,
                 onValueChange = { extractedModel = it },
@@ -288,6 +318,7 @@ fun InventoryScreen() {
                 modifier = Modifier.fillMaxWidth()
             )
 
+            SectionTitle(title = "Item details")
             OutlinedTextField(
                 value = productName,
                 onValueChange = { productName = it },
@@ -329,6 +360,7 @@ fun InventoryScreen() {
             }
 
             if (isUsed) {
+                SectionTitle(title = "Condition")
                 val selectedConditionGrade = ConditionGradeOption.entries.firstOrNull { it.code == conditionGradeCode }
                     ?: ConditionGradeOption.A
                 ConditionGradeDropdown(
@@ -347,57 +379,63 @@ fun InventoryScreen() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            BrickButton(text = if (isEditing) "Update Inventory Item" else "Save Inventory Item", onClick = {
-                if (productName.isBlank()) {
-                    status = "Product name is required"
-                    return@BrickButton
-                }
-
-                scope.launch {
-                    val input = NewInventoryInput(
-                        productName = productName,
-                        modelNumber = extractedModel.ifBlank { null },
-                        serialNumber = extractedSerial.ifBlank { null },
-                        quantity = quantity.toIntOrNull() ?: 1,
-                        expiryDateIso = expiryDateIso.ifBlank { null },
-                        costPrice = costPrice.toDoubleOrNull() ?: 0.0,
-                        sellingPrice = sellingPrice.toDoubleOrNull() ?: 0.0,
-                        itemTypeCode = if (isUsed) 2 else 1,
-                        conditionGradeCode = if (isUsed) conditionGradeCode else null,
-                        conditionNotes = conditionNotes.ifBlank { null },
-                        photoUris = capturedPhotoUris
-                    )
-
-                    val result = if (isEditing) {
-                        gateway.updateInventoryItem(editingItemId, input)
-                    } else {
-                        gateway.saveInventoryItem(input).map { Unit }
+            BrickButton(
+                text = if (isEditing) "Update Inventory Item" else "Save Inventory Item",
+                onClick = {
+                    if (productName.isBlank()) {
+                        status = "Product name is required"
+                        return@BrickButton
                     }
 
-                    status = result.fold(
-                        onSuccess = {
-                            val action = if (isEditing) "Updated" else "Saved"
-                            editingItemId = ""
-                            capturedPhotoUris = emptyList()
-                            extractedSerial = ""
-                            extractedModel = ""
-                            productName = ""
-                            quantity = "1"
-                            costPrice = "0"
-                            sellingPrice = "0"
-                            expiryDateIso = ""
-                            conditionNotes = ""
-                            conditionGradeCode = ConditionGradeOption.A.code
-                            isUsed = false
-                            isAddingItem = false
-                            refreshInventorySummary()
-                            "$action locally and queued for sync"
-                        },
-                        onFailure = { "${if (isEditing) "Update" else "Save"} failed: ${it.message.orEmpty()}" }
-                    )
-                }
-            }, modifier = Modifier.fillMaxWidth())
+                    scope.launch {
+                        val input = NewInventoryInput(
+                            productName = productName,
+                            modelNumber = extractedModel.ifBlank { null },
+                            serialNumber = extractedSerial.ifBlank { null },
+                            quantity = quantity.toIntOrNull() ?: 1,
+                            expiryDateIso = expiryDateIso.ifBlank { null },
+                            costPrice = costPrice.toDoubleOrNull() ?: 0.0,
+                            sellingPrice = sellingPrice.toDoubleOrNull() ?: 0.0,
+                            itemTypeCode = if (isUsed) 2 else 1,
+                            conditionGradeCode = if (isUsed) conditionGradeCode else null,
+                            conditionNotes = conditionNotes.ifBlank { null },
+                            photoUris = capturedPhotoUris
+                        )
+
+                        val result = if (isEditing) {
+                            gateway.updateInventoryItem(editingItemId, input)
+                        } else {
+                            gateway.saveInventoryItem(input).map { Unit }
+                        }
+
+                        status = result.fold(
+                            onSuccess = {
+                                val action = if (isEditing) "Updated" else "Saved"
+                                editingItemId = ""
+                                capturedPhotoUris = emptyList()
+                                extractedSerial = ""
+                                extractedModel = ""
+                                productName = ""
+                                quantity = "1"
+                                costPrice = "0"
+                                sellingPrice = "0"
+                                expiryDateIso = ""
+                                conditionNotes = ""
+                                conditionGradeCode = ConditionGradeOption.A.code
+                                isUsed = false
+                                isAddingItem = false
+                                refreshInventorySummary()
+                                "$action locally and queued for sync"
+                            },
+                            onFailure = { "${if (isEditing) "Update" else "Save"} failed: ${it.message.orEmpty()}" }
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
         }
+
+        StatusBanner(status)
 
         if (pendingDeleteItemId.isNotBlank()) {
             AlertDialog(
@@ -432,23 +470,6 @@ fun InventoryScreen() {
                     }
                 }
             )
-        }
-
-        if (status.isNotBlank()) {
-            Text(status, color = MaterialTheme.colorScheme.secondary)
-        }
-    }
-}
-
-@Composable
-private fun InventoryMetricCard(title: String, value: String, modifier: Modifier = Modifier) {
-    com.shopkeeper.mobile.ui.components.AccentCard(modifier = modifier) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(title, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, color = MaterialTheme.colorScheme.onBackground, style = MaterialTheme.typography.titleMedium)
         }
     }
 }
