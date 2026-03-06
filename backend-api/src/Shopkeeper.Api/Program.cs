@@ -1,8 +1,10 @@
 using System.Text;
+using DotNetEnv;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -10,7 +12,19 @@ using Shopkeeper.Api.Endpoints;
 using Shopkeeper.Api.Infrastructure;
 using Shopkeeper.Api.Services;
 
+Env.TraversePath().Load(".env");
+try
+{
+    Env.NoClobber().TraversePath().Load(".env.local");
+}
+catch
+{
+    // .env.local is optional in non-local environments.
+}
+
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.Sources.Clear();
+builder.Configuration.AddEnvironmentVariables();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();

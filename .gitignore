@@ -26,6 +26,9 @@ captures/
 # Logs
 *.log
 
+# Environment files
+backend-api/.env
+
 # Local database artifacts
 *.db
 *.sqlite

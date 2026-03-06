@@ -18,6 +18,12 @@ dotnet test Shopkeeper.sln
 dotnet run --project src/Shopkeeper.Api
 ```
 
+Backend configuration is loaded from dotenv files:
+- `backend-api/.env` for actual runtime values.
+- `backend-api/.env.local` for local/dummy overrides.
+
+`Program.cs` loads `.env` first, then `.env.local` (override), and uses environment variables for JWT, DB, Google auth, and magic-link settings.
+
 API base path: `/api/v1`
 
 ## Android Quick Start

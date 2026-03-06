@@ -21,8 +21,8 @@ public sealed class Sale : IMutableTenantEntity
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 
-    public ICollection<SaleLine> Lines { get; set; } = new List<SaleLine>();
-    public ICollection<SalePayment> Payments { get; set; } = new List<SalePayment>();
+    public ICollection<SaleLine> Lines { get; set; } = [];
+    public ICollection<SalePayment> Payments { get; set; } = [];
     public CreditAccount? CreditAccount { get; set; }
 }
 
@@ -66,7 +66,7 @@ public sealed class CreditAccount : IMutableTenantEntity
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 
     public Sale Sale { get; set; } = default!;
-    public ICollection<CreditRepayment> Repayments { get; set; } = new List<CreditRepayment>();
+    public ICollection<CreditRepayment> Repayments { get; set; } = [];
 }
 
 public sealed class CreditRepayment

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Microsoft.AspNetCore.Identity;
 
 namespace Shopkeeper.Api.Domain;
@@ -19,7 +20,7 @@ public sealed class Shop : IMutableTenantEntity
         set => Id = value;
     }
 
-    public ICollection<ShopMembership> Memberships { get; set; } = new List<ShopMembership>();
+    public ICollection<ShopMembership> Memberships { get; set; } = [];
 }
 
 public class UserAccount : IdentityUser<Guid>
@@ -31,8 +32,8 @@ public class UserAccount : IdentityUser<Guid>
     public string? Timezone { get; set; } = "UTC";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 
-    public ICollection<ShopMembership> Memberships { get; set; } = new List<ShopMembership>();
-    public ICollection<AuthIdentity> AuthIdentities { get; set; } = new List<AuthIdentity>();
+    public ICollection<ShopMembership> Memberships { get; set; } = [];
+    public ICollection<AuthIdentity> AuthIdentities { get; set; } = [];
 }
 
 public sealed class ShopMembership : IMutableTenantEntity
