@@ -1,3 +1,4 @@
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Contracts;
@@ -5,7 +6,7 @@ namespace Shopkeeper.Api.Contracts;
 public sealed record CreditAccountView(
     Guid Id,
     Guid SaleId,
-    DateTime DueDateUtc,
+    Instant DueDateUtc,
     decimal OutstandingAmount,
     CreditStatus Status);
 
@@ -15,7 +16,7 @@ public sealed record CreditRepaymentView(
     PaymentMethod Method,
     string? Reference,
     string? Notes,
-    DateTime CreatedAtUtc);
+    Instant CreatedAtUtc);
 
 public sealed record CreditDetailResponse(
     CreditAccountView Account,

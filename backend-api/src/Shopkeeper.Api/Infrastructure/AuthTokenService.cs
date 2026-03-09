@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Infrastructure;
@@ -31,7 +32,8 @@ public sealed class AuthTokenService
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_options.SigningKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
-        var expires = DateTime.UtcNow.AddMinutes(_options.AccessTokenMinutes);
+        var expiresInstant = SystemClock.Instance.GetCurrentInstant() + Duration.FromMinutes(_options.AccessTokenMinutes);
+        var expires = expiresInstant.ToDateTimeUtc();
 
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,
@@ -43,17 +45,17 @@ public sealed class AuthTokenService
         return new JwtSecurityTokenHandler().WriteToken(token);
     }
 
-    public DateTime GetAccessTokenExpiryUtc()
+    public Instant GetAccessTokenExpiryUtc()
     {
-        return DateTime.UtcNow.AddMinutes(_options.AccessTokenMinutes);
+        return SystemClock.Instance.GetCurrentInstant() + Duration.FromMinutes(_options.AccessTokenMinutes);
     }
 
-    public (string token, string hash, DateTime expiresAtUtc) GenerateRefreshToken()
+    public (string token, string hash, Instant expiresAtUtc) GenerateRefreshToken()
     {
         var bytes = RandomNumberGenerator.GetBytes(32);
         var token = Convert.ToBase64String(bytes);
         var hash = ComputeSha256(token);
-        var expiresAt = DateTime.UtcNow.AddDays(_options.RefreshTokenDays);
+        var expiresAt = SystemClock.Instance.GetCurrentInstant() + Duration.FromDays(_options.RefreshTokenDays);
         return (token, hash, expiresAt);
     }
 

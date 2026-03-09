@@ -30,7 +30,7 @@ captures/
 *.log
 
 # Environment files
-backend-api/.env
+backend-api/src/Shopkeeper.Api/.env
 
 # Local database artifacts
 *.db

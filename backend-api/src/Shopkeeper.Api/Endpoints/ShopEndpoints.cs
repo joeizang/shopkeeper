@@ -6,6 +6,7 @@ using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Infrastructure;
+using Shopkeeper.Api.Services;
 
 namespace Shopkeeper.Api.Endpoints;
 
@@ -32,7 +33,7 @@ public static class ShopEndpoints
     }
 
     private static async Task<IResult> GetMyShops(
-        ShopkeeperDbContext db,
+        ShopReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -43,25 +44,14 @@ public static class ShopEndpoints
             return Results.Unauthorized();
         }
 
-        var shops = await db.ShopMemberships
-            .Where(x => x.UserAccountId == userId.Value && x.IsActive)
-            .Join(db.Shops, m => m.ShopId, s => s.Id, (m, s) => new ShopView(
-                s.Id,
-                s.Name,
-                s.Code,
-                s.VatEnabled,
-                s.VatRate,
-                s.DefaultDiscountPercent,
-                NormalizeRoleName(m.Role),
-                Convert.ToBase64String(s.RowVersion)))
-            .ToListAsync(ct);
-
-        return Results.Ok(shops);
+        var cached = await reads.GetMyShopsAsync(userId.Value, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> CreateShop(
         [FromBody] CreateShopRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -104,6 +94,7 @@ public static class ShopEndpoints
         db.Shops.Add(shop);
         db.ShopMemberships.Add(membership);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.UserShops(userId.Value)], ct);
 
         return Results.Created($"/api/v1/shops/{shop.Id}", new ShopView(
             shop.Id,
@@ -120,6 +111,7 @@ public static class ShopEndpoints
         Guid shopId,
         [FromBody] UpdateShopVatSettingsRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -180,6 +172,9 @@ public static class ShopEndpoints
         shop.DefaultDiscountPercent = request.DefaultDiscountPercent;
         await db.SaveChangesAsync(ct);
 
+        var userIds = await GetShopMemberUserIdsAsync(db, shopId, ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Staff(shopId), .. userIds.Select(ApiCacheTags.UserShops)], ct);
+
         return Results.Ok(new ShopView(
             shop.Id,
             shop.Name,
@@ -195,6 +190,7 @@ public static class ShopEndpoints
         Guid shopId,
         [FromBody] InviteStaffRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         UserManager<UserAccount> userManager,
         HttpContext httpContext,
@@ -265,6 +261,7 @@ public static class ShopEndpoints
 
         db.ShopMemberships.Add(membership);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Staff(shopId), ApiCacheTags.UserShops(user.Id)], ct);
 
         return Results.Ok(ToStaffView(membership, user));
     }
@@ -272,6 +269,7 @@ public static class ShopEndpoints
     private static async Task<IResult> ListStaff(
         Guid shopId,
         ShopkeeperDbContext db,
+        ShopReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -293,20 +291,15 @@ public static class ShopEndpoints
             return Results.Forbid();
         }
 
-        var staff = await db.ShopMemberships
-            .Where(x => x.ShopId == shopId && x.Role != MembershipRole.Owner)
-            .Include(x => x.UserAccount)
-            .OrderBy(x => x.Role)
-            .ThenBy(x => x.CreatedAtUtc)
-            .ToListAsync(ct);
-
-        return Results.Ok(staff.Select(x => ToStaffView(x, x.UserAccount)));
+        var cached = await reads.ListStaffAsync(shopId, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> ActivateStaff(
         Guid shopId,
         Guid staffId,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -327,6 +320,7 @@ public static class ShopEndpoints
 
         membership.IsActive = true;
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Staff(shopId), ApiCacheTags.UserShops(membership.UserAccountId)], ct);
 
         return Results.Ok(new { staffId = membership.Id, status = "active" });
     }
@@ -336,6 +330,7 @@ public static class ShopEndpoints
         Guid staffId,
         [FromBody] UpdateStaffMembershipRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -379,8 +374,19 @@ public static class ShopEndpoints
         membership.Role = requestedRole;
         membership.IsActive = request.IsActive;
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Staff(shopId), ApiCacheTags.UserShops(membership.UserAccountId)], ct);
 
         return Results.Ok(ToStaffView(membership, membership.UserAccount));
+    }
+
+    private static async Task<IReadOnlyList<Guid>> GetShopMemberUserIdsAsync(ShopkeeperDbContext db, Guid shopId, CancellationToken ct)
+    {
+        return await db.ShopMemberships
+            .AsNoTracking()
+            .Where(x => x.ShopId == shopId)
+            .Select(x => x.UserAccountId)
+            .Distinct()
+            .ToListAsync(ct);
     }
 
     private static StaffMembershipView ToStaffView(ShopMembership membership, UserAccount user)

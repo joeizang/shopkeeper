@@ -24,7 +24,7 @@ public static class ExpensesEndpoints
     private static async Task<IResult> ListExpenses(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -32,15 +32,15 @@ public static class ExpensesEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var fromUtc = ParseDateStart(from);
-        var toUtc = ParseDateEnd(to);
+        var fromUtc = DateRangeParser.ParseDateStart(from);
+        var toUtc = DateRangeParser.ParseDateEnd(to);
         if ((from is not null && !fromUtc.HasValue) || (to is not null && !toUtc.HasValue))
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = ["Invalid date format. Use YYYY-MM-DD."] });
         }
 
-        var expenses = await reporting.ListExpenses(tenantId.Value, fromUtc, toUtc, ct);
-        return Results.Ok(expenses);
+        var cached = await reads.GetExpensesAsync(tenantId.Value, fromUtc, toUtc, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> CreateExpense(
@@ -111,19 +111,4 @@ public static class ExpensesEndpoints
         return deleted ? Results.Ok(new { id, status = "deleted" }) : Results.NotFound();
     }
 
-    private static DateTime? ParseDateStart(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        return DateOnly.TryParse(value, out var dateOnly)
-            ? dateOnly.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc)
-            : null;
-    }
-
-    private static DateTime? ParseDateEnd(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        return DateOnly.TryParse(value, out var dateOnly)
-            ? dateOnly.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc)
-            : null;
-    }
 }

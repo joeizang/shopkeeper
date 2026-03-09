@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace Shopkeeper.Api.Contracts;
 
 public sealed record RegisterOwnerRequest(
@@ -24,13 +26,13 @@ public sealed record MagicLinkVerifyRequest(string Token, Guid? ShopId);
 
 public sealed record MagicLinkRequestResponse(
     Guid RequestId,
-    DateTime ExpiresAtUtc,
+    Instant ExpiresAtUtc,
     string Message,
     string? DebugToken);
 
 public sealed record AuthResponse(
     string AccessToken,
     string RefreshToken,
-    DateTime AccessTokenExpiresAtUtc,
+    Instant AccessTokenExpiresAtUtc,
     Guid ShopId,
     string Role);

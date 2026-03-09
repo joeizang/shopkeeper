@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using NodaTime;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
 using Microsoft.Extensions.Configuration;
@@ -745,7 +746,7 @@ public sealed class ApiIntegrationTests
         await using (var scope = factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ShopkeeperDbContext>();
-            var baseTime = DateTime.UtcNow.AddMinutes(-10);
+            var baseTime = SystemClock.Instance.GetCurrentInstant() - Duration.FromMinutes(10);
             for (var i = 0; i < 501; i++)
             {
                 db.SyncChanges.Add(new SyncChange
@@ -756,8 +757,8 @@ public sealed class ApiIntegrationTests
                     EntityId = Guid.NewGuid(),
                     Operation = SyncOperation.Update,
                     PayloadJson = "{}",
-                    ClientUpdatedAtUtc = baseTime.AddSeconds(i),
-                    ServerUpdatedAtUtc = baseTime.AddSeconds(i),
+                    ClientUpdatedAtUtc = baseTime + Duration.FromSeconds(i),
+                    ServerUpdatedAtUtc = baseTime + Duration.FromSeconds(i),
                     Status = SyncStatus.Accepted
                 });
             }
@@ -787,6 +788,79 @@ public sealed class ApiIntegrationTests
         var secondPage = (await secondPull.Content.ReadFromJsonAsync<SyncPullEnvelope>())!;
         Assert.False(secondPage.HasMore);
         Assert.Single(secondPage.Changes);
+    }
+
+
+    [Fact]
+    public async Task InventoryList_ConditionalGet_Returns304_AndRefreshesAfterMutation()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-cache-inventory@shopkeeper.local", "Cache Inventory Shop");
+        SetBearer(client, owner.AccessToken);
+        await CreateInventoryItem(client, "CACHE-INV-1");
+
+        var firstResponse = await client.GetAsync("/api/v1/inventory/items");
+        firstResponse.EnsureSuccessStatusCode();
+        var firstEtag = firstResponse.Headers.ETag?.ToString();
+        Assert.False(string.IsNullOrWhiteSpace(firstEtag));
+
+        using var notModifiedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/inventory/items");
+        notModifiedRequest.Headers.IfNoneMatch.ParseAdd(firstEtag);
+        var notModifiedResponse = await client.SendAsync(notModifiedRequest);
+        Assert.Equal(HttpStatusCode.NotModified, notModifiedResponse.StatusCode);
+
+        await CreateInventoryItem(client, "CACHE-INV-2");
+
+        using var refreshedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/inventory/items");
+        refreshedRequest.Headers.IfNoneMatch.ParseAdd(firstEtag);
+        var refreshedResponse = await client.SendAsync(refreshedRequest);
+        refreshedResponse.EnsureSuccessStatusCode();
+        Assert.NotEqual(firstEtag, refreshedResponse.Headers.ETag?.ToString());
+    }
+
+    [Fact]
+    public async Task ShopsMe_ConditionalGet_Returns304_AndRefreshesAfterSettingsUpdate()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-cache-shops@shopkeeper.local", "Cache Shops");
+        SetBearer(client, owner.AccessToken);
+
+        var firstResponse = await client.GetAsync("/api/v1/shops/me");
+        firstResponse.EnsureSuccessStatusCode();
+        var firstEtag = firstResponse.Headers.ETag?.ToString();
+        Assert.False(string.IsNullOrWhiteSpace(firstEtag));
+        var shops = (await firstResponse.Content.ReadFromJsonAsync<List<ShopEnvelope>>())!;
+        var shop = Assert.Single(shops);
+
+        using var notModifiedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/shops/me");
+        notModifiedRequest.Headers.IfNoneMatch.ParseAdd(firstEtag);
+        var notModifiedResponse = await client.SendAsync(notModifiedRequest);
+        Assert.Equal(HttpStatusCode.NotModified, notModifiedResponse.StatusCode);
+
+        var updateResponse = await client.PatchAsJsonAsync($"/api/v1/shops/{shop.Id}/settings", new
+        {
+            vatEnabled = false,
+            vatRate = 0m,
+            defaultDiscountPercent = 0.15m,
+            rowVersionBase64 = shop.RowVersionBase64
+        });
+        updateResponse.EnsureSuccessStatusCode();
+
+        using var refreshedRequest = new HttpRequestMessage(HttpMethod.Get, "/api/v1/shops/me");
+        refreshedRequest.Headers.IfNoneMatch.ParseAdd(firstEtag);
+        var refreshedResponse = await client.SendAsync(refreshedRequest);
+        refreshedResponse.EnsureSuccessStatusCode();
+        Assert.NotEqual(firstEtag, refreshedResponse.Headers.ETag?.ToString());
     }
 
     private static async Task<AuthEnvelope> RegisterOwner(HttpClient client, string email, string shopName)

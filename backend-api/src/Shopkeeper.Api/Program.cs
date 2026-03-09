@@ -1,14 +1,17 @@
 using System.Diagnostics;
+using System.Net;
 using System.Text;
 using System.Threading.RateLimiting;
-using DotNetEnv;
+using dotenv.net;
+using NodaTime;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.HttpLogging;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.IdentityModel.Tokens;
 using Shopkeeper.Api.Data;
@@ -16,26 +19,33 @@ using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Endpoints;
 using Shopkeeper.Api.Infrastructure;
 using Shopkeeper.Api.Services;
+using ZiggyCreatures.Caching.Fusion;
 
-Env.TraversePath().Load(".env");
-try
-{
-    Env.NoClobber().TraversePath().Load(".env.local");
-}
-catch (Exception ex) when (ex is FileNotFoundException || ex.GetType().Name.Contains("EnvFile"))
-{
-}
+DotEnv.Load(options: new DotEnvOptions(envFilePaths: ["./.env", "./.env.local"]));
+var envs = DotEnv.Read();
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.AddEnvironmentVariables();
+// builder.Configuration.AddEnvironmentVariables();
 
 builder.WebHost.ConfigureKestrel(kestrel =>
     kestrel.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
 
-var httpsRedirectionEnabled = builder.Configuration.GetValue<bool?>("App:HttpsRedirectionEnabled")
+var httpsRedirectionEnabled = builder.Configuration.GetValue<bool?>("AppHttpsRedirectionEnabled")
     ?? !builder.Environment.IsDevelopment();
 
 builder.Services.AddProblemDetails();
+builder.Services.ConfigureHttpJsonOptions(options =>
+    NodaTime.Serialization.SystemTextJson.Extensions
+        .ConfigureForNodaTime(options.SerializerOptions, DateTimeZoneProviders.Tzdb));
+builder.Services.AddFusionCache()
+    .WithDefaultEntryOptions(options =>
+    {
+        options.Duration = TimeSpan.FromMinutes(1);
+        options.IsFailSafeEnabled = true;
+        options.FailSafeMaxDuration = TimeSpan.FromMinutes(5);
+        options.FactorySoftTimeout = TimeSpan.FromSeconds(2);
+        options.FactoryHardTimeout = TimeSpan.FromSeconds(10);
+    });
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpLogging(options =>
@@ -51,29 +61,32 @@ builder.Services.AddHttpLogging(options =>
 
 builder.Services.AddOptions<JwtOptions>()
     .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
-    .Validate(o => !string.IsNullOrWhiteSpace(o.Issuer), "Jwt:Issuer is required.")
-    .Validate(o => !string.IsNullOrWhiteSpace(o.Audience), "Jwt:Audience is required.")
-    .Validate(o => !string.IsNullOrWhiteSpace(o.SigningKey) && o.SigningKey.Length >= 32, "Jwt:SigningKey must be configured with at least 32 characters.")
-    .Validate(o => o.AccessTokenMinutes is >= 5 and <= 1440, "Jwt:AccessTokenMinutes must be between 5 and 1440.")
-    .Validate(o => o.RefreshTokenDays is >= 1 and <= 365, "Jwt:RefreshTokenDays must be between 1 and 365.")
+    .Validate(o => !string.IsNullOrWhiteSpace(o.Issuer), "JwtIssuer is required.")
+    .Validate(o => !string.IsNullOrWhiteSpace(o.Audience), "JwtAudience is required.")
+    .Validate(o => !string.IsNullOrWhiteSpace(o.SigningKey) && o.SigningKey.Length >= 32, "JwtSigningKey must be configured with at least 32 characters.")
+    .Validate(o => o.AccessTokenMinutes is >= 5 and <= 1440, "JwtAccessTokenMinutes must be between 5 and 1440.")
+    .Validate(o => o.RefreshTokenDays is >= 1 and <= 365, "JwtRefreshTokenDays must be between 1 and 365.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<MagicLinkOptions>()
     .Bind(builder.Configuration.GetSection(MagicLinkOptions.SectionName))
-    .Validate(o => o.ExpiryMinutes is >= 5 and <= 60, "MagicLink:ExpiryMinutes must be between 5 and 60.")
-    .Validate(o => o.MaxRequestsPerMinutePerEmail is >= 1 and <= 20, "MagicLink:MaxRequestsPerMinutePerEmail must be between 1 and 20.")
-    .Validate(o => Uri.TryCreate(o.AppLinkBaseUrl, UriKind.Absolute, out _), "MagicLink:AppLinkBaseUrl must be an absolute URL.")
+    .Validate(o => o.ExpiryMinutes is >= 5 and <= 60, "MagicLinkExpiryMinutes must be between 5 and 60.")
+    .Validate(o => o.MaxRequestsPerMinutePerEmail is >= 1 and <= 20, "MagicLinkMaxRequestsPerMinutePerEmail must be between 1 and 20.")
+    .Validate(o => Uri.TryCreate(o.AppLinkBaseUrl, UriKind.Absolute, out _), "MagicLinkAppLinkBaseUrl must be an absolute URL.")
     .ValidateOnStart();
 
 builder.Services.AddOptions<GoogleAuthOptions>()
-    .Bind(builder.Configuration.GetSection(GoogleAuthOptions.SectionName));
+    .Bind(builder.Configuration.GetSection(GoogleAuthOptions.SectionName))
+    .Validate(o => o.AllowedAudiences.Length == 0 || o.AllowedAudiences.All(a => a.Length > 10), "GoogleAllowedAudiences contains an entry that appears invalid.")
+    .ValidateOnStart();
 
-var rawConnectionString = builder.Configuration.GetConnectionString("Default")
-    ?? "Data Source=shopkeeper.db";
-var connectionString = SqliteConnectionStringResolver.Resolve(rawConnectionString, builder.Environment.ContentRootPath);
+var connectionString = envs["DbConnectionString"]
+    ?? "Host=192.168.0.5;Port=5432;Database=shopkeeper;Username=postgres;Password=postgres-2026";
+
+var test = connectionString;
 
 builder.Services.AddDbContext<ShopkeeperDbContext>(options =>
-    options.UseSqlite(connectionString));
+    options.UseNpgsql(connectionString, o => o.UseNodaTime()));
 
 builder.Services
     .AddIdentityCore<UserAccount>(options =>
@@ -90,10 +103,33 @@ builder.Services
     })
     .AddEntityFrameworkStores<ShopkeeperDbContext>();
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders =
+        ForwardedHeaders.XForwardedFor |
+        ForwardedHeaders.XForwardedProto |
+        ForwardedHeaders.XForwardedHost;
+
+    // Restrict to only trust forwarded headers from
+    // the local Caddy instance (loopback). This prevents
+    // header spoofing from external clients.
+    options.KnownIPNetworks?.Clear();
+    options.KnownProxies.Clear();
+    options.KnownProxies.Add(IPAddress.Loopback);      // 127.0.0.1
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);  // ::1
+});
+
 builder.Services.AddScoped<AuthTokenService>();
+builder.Services.AddScoped<ApiCacheService>();
+builder.Services.AddScoped<AccountReadService>();
+builder.Services.AddScoped<ShopReadService>();
+builder.Services.AddScoped<InventoryReadService>();
+builder.Services.AddScoped<SaleReadService>();
+builder.Services.AddScoped<CreditReadService>();
 builder.Services.AddScoped<SaleCalculator>();
 builder.Services.AddScoped<CreditLedgerService>();
 builder.Services.AddScoped<ReportingService>();
+builder.Services.AddScoped<ReportingReadService>();
 builder.Services.AddScoped<MagicLinkService>();
 builder.Services.AddScoped<IdempotencyService>();
 builder.Services.AddScoped<IGoogleTokenValidator, GoogleTokenValidator>();
@@ -217,7 +253,28 @@ builder.Services.AddCors(options =>
     });
 });
 
+// ── Enable HTTP/2 (and optionally HTTP/3) on Kestrel ──
+builder.WebHost.ConfigureKestrel(options =>
+{
+    // Listen on loopback only — Caddy is the public face.
+    // Never expose Kestrel directly on 0.0.0.0 in production.
+    options.Listen(IPAddress.Loopback, 5000, listenOptions =>
+    {
+        // h2c = HTTP/2 cleartext (no TLS on this hop,
+        // Caddy handles TLS termination)
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+    });
+});
+
 var app = builder.Build();
+
+// ForwardedHeaders MUST be the first middleware —
+// everything downstream depends on the corrected values
+app.UseForwardedHeaders();
+
+// Capture the logger once at startup — not per-request — to avoid
+// resolving ILoggerFactory from the DI container on every request.
+var requestLogger = app.Logger;
 
 app.Use(async (ctx, next) =>
 {
@@ -230,8 +287,7 @@ app.Use(async (ctx, next) =>
     ctx.Response.Headers["X-Correlation-Id"] = correlationId;
     ctx.Items["CorrelationId"] = correlationId;
 
-    var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shopkeeper.Api.Request");
-    using var scope = logger.BeginScope(new Dictionary<string, object?>
+    using var scope = requestLogger.BeginScope(new Dictionary<string, object?>
     {
         ["CorrelationId"] = correlationId,
         ["TraceId"] = Activity.Current?.TraceId.ToString(),
@@ -244,7 +300,7 @@ app.Use(async (ctx, next) =>
     try
     {
         await next();
-        logger.LogInformation("HTTP {Method} {Path} responded {StatusCode} in {ElapsedMs} ms",
+        requestLogger.LogInformation("HTTP {Method} {Path} responded {StatusCode} in {ElapsedMs} ms",
             ctx.Request.Method,
             ctx.Request.Path,
             ctx.Response.StatusCode,
@@ -252,7 +308,8 @@ app.Use(async (ctx, next) =>
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "HTTP {Method} {Path} failed after {ElapsedMs} ms", ctx.Request.Method, ctx.Request.Path, sw.ElapsedMilliseconds);
+        requestLogger.LogError(ex, "HTTP {Method} {Path} failed after {ElapsedMs} ms",
+            ctx.Request.Method, ctx.Request.Path, sw.ElapsedMilliseconds);
         throw;
     }
 });
@@ -287,12 +344,12 @@ app.MapHealthChecks("/healthz/live", new Microsoft.AspNetCore.Diagnostics.Health
 {
     Predicate = check => check.Tags.Contains("live"),
     ResultStatusCodes = { [HealthStatus.Healthy] = 200, [HealthStatus.Degraded] = 200, [HealthStatus.Unhealthy] = 503 }
-});
+}).RequireRateLimiting("auth");
 app.MapHealthChecks("/healthz/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
     ResultStatusCodes = { [HealthStatus.Healthy] = 200, [HealthStatus.Degraded] = 200, [HealthStatus.Unhealthy] = 503 }
-});
+}).RequireRateLimiting("auth");
 
 using (var scope = app.Services.CreateScope())
 {
@@ -305,7 +362,6 @@ using (var scope = app.Services.CreateScope())
     }
     else
     {
-        await LegacySqliteMigrationBootstrapper.BootstrapAsync(db);
         await db.Database.MigrateAsync();
     }
 

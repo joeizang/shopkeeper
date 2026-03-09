@@ -1,3 +1,4 @@
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Contracts;
@@ -7,7 +8,7 @@ public sealed record CreateInventoryItemRequest(
     string? ModelNumber,
     string? SerialNumber,
     int Quantity,
-    DateOnly? ExpiryDate,
+    LocalDate? ExpiryDate,
     decimal CostPrice,
     decimal SellingPrice,
     ItemType ItemType,
@@ -19,7 +20,7 @@ public sealed record UpdateInventoryItemRequest(
     string? ModelNumber,
     string? SerialNumber,
     int? Quantity,
-    DateOnly? ExpiryDate,
+    LocalDate? ExpiryDate,
     decimal? CostPrice,
     decimal? SellingPrice,
     ItemType? ItemType,
@@ -37,7 +38,7 @@ public sealed record InventoryItemView(
     string? ModelNumber,
     string? SerialNumber,
     int Quantity,
-    DateOnly? ExpiryDate,
+    LocalDate? ExpiryDate,
     decimal CostPrice,
     decimal SellingPrice,
     ItemType ItemType,

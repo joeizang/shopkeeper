@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -12,8 +13,6 @@ namespace Shopkeeper.Api.Endpoints;
 
 public static class CreditEndpoints
 {
-    private const string ServerDeviceId = "server-api";
-
     public static IEndpointRouteBuilder MapCreditEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/credits")
@@ -27,9 +26,9 @@ public static class CreditEndpoints
     }
 
     private static async Task<IResult> ListCredits(
-        [FromQuery] int page,
-        [FromQuery] int limit,
-        ShopkeeperDbContext db,
+        [FromQuery] int? page,
+        [FromQuery] int? limit,
+        CreditReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -40,24 +39,15 @@ public static class CreditEndpoints
             return Results.Unauthorized();
         }
 
-        var effectivePage = Math.Max(1, page == 0 ? 1 : page);
-        var effectiveLimit = Math.Clamp(limit == 0 ? 100 : limit, 1, 200);
-
-        var query = db.CreditAccounts.Where(x => x.TenantId == tenantId.Value);
-        var total = await query.CountAsync(ct);
-        var credits = await query
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .Skip((effectivePage - 1) * effectiveLimit)
-            .Take(effectiveLimit)
-            .Select(x => new CreditAccountView(x.Id, x.SaleId, x.DueDateUtc, x.OutstandingAmount, x.Status))
-            .ToListAsync(ct);
-
-        return Results.Ok(new { total, page = effectivePage, limit = effectiveLimit, items = credits });
+        var effectivePage = Math.Max(1, page.GetValueOrDefault(1));
+        var effectiveLimit = Math.Clamp(limit.GetValueOrDefault(100), 1, 200);
+        var cached = await reads.ListCreditsAsync(tenantId.Value, effectivePage, effectiveLimit, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> GetCredit(
         Guid saleId,
-        ShopkeeperDbContext db,
+        CreditReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -68,28 +58,10 @@ public static class CreditEndpoints
             return Results.Unauthorized();
         }
 
-        var credit = await db.CreditAccounts
-            .Include(x => x.Repayments)
-                .ThenInclude(x => x.SalePayment)
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.SaleId == saleId, ct);
-
-        if (credit is null)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(new CreditDetailResponse(
-            new CreditAccountView(credit.Id, credit.SaleId, credit.DueDateUtc, credit.OutstandingAmount, credit.Status),
-            credit.Repayments
-                .OrderByDescending(r => r.CreatedAtUtc)
-                .Select(r => new CreditRepaymentView(
-                    r.Id,
-                    r.Amount,
-                    r.SalePayment.Method,
-                    r.SalePayment.Reference,
-                    r.Notes,
-                    r.CreatedAtUtc))
-                .ToList()));
+        var cached = await reads.GetCreditAsync(tenantId.Value, saleId, ct);
+        return cached.Value is null
+            ? Results.NotFound()
+            : HttpCacheResults.OkOrNotModified(httpContext, cached!);
     }
 
     private static async Task<IResult> AddRepayment(
@@ -98,6 +70,7 @@ public static class CreditEndpoints
         ShopkeeperDbContext db,
         CreditLedgerService service,
         IdempotencyService idempotency,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -177,7 +150,7 @@ public static class CreditEndpoints
             db.SyncChanges.Add(new SyncChange
             {
                 TenantId = tenantId.Value,
-                DeviceId = ServerDeviceId,
+                DeviceId = SyncConstants.ServerDeviceId,
                 EntityName = nameof(Sale),
                 EntityId = sale.Id,
                 Operation = SyncOperation.Update,
@@ -195,10 +168,11 @@ public static class CreditEndpoints
                     dueDateUtc = sale.DueDateUtc,
                     updatedAtUtc = sale.UpdatedAtUtc
                 }),
-                ClientUpdatedAtUtc = DateTime.UtcNow
+                ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
             });
 
             await db.SaveChangesAsync(ct);
+            await cache.InvalidateTagsAsync([ApiCacheTags.Credits(tenantId.Value), ApiCacheTags.Sales(tenantId.Value), ApiCacheTags.Reports(tenantId.Value)], ct);
 
             var response = new
             {

@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace Shopkeeper.Api.Contracts;
 
 public sealed record InventoryReportRow(
@@ -8,10 +10,10 @@ public sealed record InventoryReportRow(
     decimal SellingPrice,
     decimal CostValue,
     decimal SellingValue,
-    DateOnly? ExpiryDate);
+    LocalDate? ExpiryDate);
 
 public sealed record InventoryReportResponse(
-    DateTime GeneratedAtUtc,
+    Instant GeneratedAtUtc,
     int TotalProducts,
     int TotalUnits,
     int LowStockItems,
@@ -20,7 +22,7 @@ public sealed record InventoryReportResponse(
     IReadOnlyList<InventoryReportRow> Items);
 
 public sealed record SalesDailySummaryRow(
-    DateOnly Date,
+    LocalDate Date,
     int SalesCount,
     decimal Revenue,
     decimal Outstanding);
@@ -30,9 +32,9 @@ public sealed record SalesPaymentSummaryRow(
     decimal Amount);
 
 public sealed record SalesReportResponse(
-    DateTime GeneratedAtUtc,
-    DateTime FromUtc,
-    DateTime ToUtc,
+    Instant GeneratedAtUtc,
+    Instant FromUtc,
+    Instant ToUtc,
     int SalesCount,
     decimal Revenue,
     decimal VatAmount,
@@ -42,9 +44,9 @@ public sealed record SalesReportResponse(
     IReadOnlyList<SalesPaymentSummaryRow> Payments);
 
 public sealed record ProfitLossReportResponse(
-    DateTime GeneratedAtUtc,
-    DateTime FromUtc,
-    DateTime ToUtc,
+    Instant GeneratedAtUtc,
+    Instant FromUtc,
+    Instant ToUtc,
     decimal Revenue,
     decimal Cogs,
     decimal GrossProfit,
@@ -62,15 +64,15 @@ public sealed record CreditorReportRow(
     string SaleNumber,
     string CustomerName,
     string ItemsSummary,
-    DateTime DueDateUtc,
+    Instant DueDateUtc,
     int DaysOverdue,
     decimal OutstandingAmount,
     string Status);
 
 public sealed record CreditorsReportResponse(
-    DateTime GeneratedAtUtc,
-    DateTime? FromUtc,
-    DateTime? ToUtc,
+    Instant GeneratedAtUtc,
+    Instant? FromUtc,
+    Instant? ToUtc,
     int OpenCredits,
     decimal TotalOutstanding,
     IReadOnlyList<CreditorReportRow> Credits);
@@ -82,8 +84,8 @@ public sealed record ReportJobView(
     string Status,
     string? FilterJson,
     Guid? ReportFileId,
-    DateTime RequestedAtUtc,
-    DateTime? CompletedAtUtc,
+    Instant RequestedAtUtc,
+    Instant? CompletedAtUtc,
     string? FailureReason);
 
 public sealed record ReportFileView(
@@ -93,10 +95,10 @@ public sealed record ReportFileView(
     string FileName,
     string ContentType,
     long ByteLength,
-    DateTime CreatedAtUtc);
+    Instant CreatedAtUtc);
 
 public sealed record QueueReportJobRequest(
     string ReportType,
     string Format,
-    DateTime? FromUtc,
-    DateTime? ToUtc);
+    Instant? FromUtc,
+    Instant? ToUtc);

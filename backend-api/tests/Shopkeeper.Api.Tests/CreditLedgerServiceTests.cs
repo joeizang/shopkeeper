@@ -1,3 +1,4 @@
+using NodaTime;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Services;
 
@@ -13,7 +14,7 @@ public sealed class CreditLedgerServiceTests
         {
             TenantId = Guid.NewGuid(),
             SaleId = Guid.NewGuid(),
-            DueDateUtc = DateTime.UtcNow.AddDays(7),
+            DueDateUtc = SystemClock.Instance.GetCurrentInstant() + Duration.FromDays(7),
             OutstandingAmount = 2000m,
             Status = CreditStatus.Open
         };

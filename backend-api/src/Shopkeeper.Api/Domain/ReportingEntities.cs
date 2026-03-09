@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace Shopkeeper.Api.Domain;
 
 public sealed class Expense : IMutableTenantEntity
@@ -7,11 +9,11 @@ public sealed class Expense : IMutableTenantEntity
     public string Title { get; set; } = string.Empty;
     public string Category { get; set; } = "General";
     public decimal Amount { get; set; }
-    public DateTime ExpenseDateUtc { get; set; }
+    public Instant ExpenseDateUtc { get; set; }
     public string? Notes { get; set; }
     public Guid? CreatedByUserAccountId { get; set; }
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
+    public Instant UpdatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 }
 
@@ -26,9 +28,9 @@ public sealed class ReportJob : IMutableTenantEntity
     public string? FailureReason { get; set; }
     public Guid RequestedByUserAccountId { get; set; }
     public Guid? ReportFileId { get; set; }
-    public DateTime RequestedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime? CompletedAtUtc { get; set; }
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant RequestedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
+    public Instant? CompletedAtUtc { get; set; }
+    public Instant UpdatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 
     public ReportFile? ReportFile { get; set; }
@@ -45,7 +47,7 @@ public sealed class ReportFile : IMutableTenantEntity
     public long ByteLength { get; set; }
     public byte[] Content { get; set; } = Array.Empty<byte>();
     public Guid CreatedByUserAccountId { get; set; }
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
+    public Instant UpdatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 }

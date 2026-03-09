@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace Shopkeeper.Api.Domain;
 
 public sealed class Sale : IMutableTenantEntity
@@ -13,12 +15,12 @@ public sealed class Sale : IMutableTenantEntity
     public decimal TotalAmount { get; set; }
     public decimal OutstandingAmount { get; set; }
     public bool IsCredit { get; set; }
-    public DateTime? DueDateUtc { get; set; }
+    public Instant? DueDateUtc { get; set; }
     public SaleStatus Status { get; set; } = SaleStatus.Completed;
     public bool IsVoided { get; set; }
     public Guid CreatedByMembershipId { get; set; }
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
+    public Instant UpdatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 
     public ICollection<SaleLine> Lines { get; set; } = [];
@@ -49,7 +51,7 @@ public sealed class SalePayment
     public PaymentMethod Method { get; set; }
     public decimal Amount { get; set; }
     public string? Reference { get; set; }
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
 
     public Sale Sale { get; set; } = default!;
 }
@@ -59,11 +61,11 @@ public sealed class CreditAccount : IMutableTenantEntity
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid TenantId { get; set; }
     public Guid SaleId { get; set; }
-    public DateTime DueDateUtc { get; set; }
+    public Instant DueDateUtc { get; set; }
     public decimal OutstandingAmount { get; set; }
     public CreditStatus Status { get; set; } = CreditStatus.Open;
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
+    public Instant UpdatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
 
     public Sale Sale { get; set; } = default!;
@@ -78,8 +80,14 @@ public sealed class CreditRepayment
     public Guid SalePaymentId { get; set; }
     public decimal Amount { get; set; }
     public string? Notes { get; set; }
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
 
     public CreditAccount CreditAccount { get; set; } = default!;
     public SalePayment SalePayment { get; set; } = default!;
+}
+
+public sealed class TenantSaleCounter
+{
+    public Guid TenantId { get; set; }
+    public int NextSaleNumber { get; set; } = 1;
 }

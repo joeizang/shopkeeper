@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Data;
@@ -33,6 +34,7 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
     public DbSet<DeviceCheckpoint> DeviceCheckpoints => Set<DeviceCheckpoint>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
+    public DbSet<TenantSaleCounter> TenantSaleCounters => Set<TenantSaleCounter>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -157,6 +159,8 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
             .HasIndex(x => new { x.TenantId, x.Scope, x.IdempotencyKey, x.BucketKey })
             .IsUnique();
 
+        modelBuilder.Entity<TenantSaleCounter>().HasKey(x => x.TenantId);
+
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {
             if (typeof(IMutableTenantEntity).IsAssignableFrom(entityType.ClrType))
@@ -182,7 +186,7 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
 
     private void ApplyMutableEntityUpdates()
     {
-        var now = DateTime.UtcNow;
+        var now = SystemClock.Instance.GetCurrentInstant();
         foreach (var entry in ChangeTracker.Entries<IMutableTenantEntity>())
         {
             if (entry.State is EntityState.Added or EntityState.Modified)

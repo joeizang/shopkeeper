@@ -2,10 +2,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Infrastructure;
+using Shopkeeper.Api.Services;
 
 namespace Shopkeeper.Api.Endpoints;
 
@@ -29,6 +31,7 @@ public static class SyncEndpoints
     private static async Task<IResult> PushChanges(
         [FromBody] SyncPushRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -47,10 +50,7 @@ public static class SyncEndpoints
             });
         }
 
-        var conflicts = new List<SyncConflictView>();
-        var acceptedCount = 0;
         var role = RoleCapabilities.GetRole(httpContext.User);
-
         if (!role.HasValue)
         {
             return Results.Forbid();
@@ -62,24 +62,61 @@ public static class SyncEndpoints
             {
                 return Results.Forbid();
             }
+        }
 
-            var alreadyApplied = await db.SyncChanges.AnyAsync(x =>
+        // Batch: load all referenced entities up-front to avoid N+1 per-change DB queries.
+        var entityIds = request.Changes.Select(c => c.EntityId).Distinct().ToList();
+
+        var inventoryItemIds = request.Changes
+            .Where(c => c.EntityName == nameof(InventoryItem))
+            .Select(c => c.EntityId)
+            .Distinct()
+            .ToList();
+        var inventoryItems = inventoryItemIds.Count > 0
+            ? await db.InventoryItems
+                .Where(x => x.TenantId == tenantId.Value && inventoryItemIds.Contains(x.Id))
+                .ToDictionaryAsync(x => x.Id, ct)
+            : new Dictionary<Guid, InventoryItem>();
+
+        var saleIds = request.Changes
+            .Where(c => c.EntityName == nameof(Sale))
+            .Select(c => c.EntityId)
+            .Distinct()
+            .ToList();
+        var saleEntities = saleIds.Count > 0
+            ? await db.Sales
+                .Where(x => x.TenantId == tenantId.Value && saleIds.Contains(x.Id))
+                .ToDictionaryAsync(x => x.Id, ct)
+            : new Dictionary<Guid, Sale>();
+
+        // Batch: pre-load already-accepted change fingerprints to avoid per-change AnyAsync.
+        var alreadyAccepted = await db.SyncChanges
+            .Where(x =>
                 x.TenantId == tenantId.Value &&
-                x.DeviceId == change.DeviceId &&
-                x.EntityId == change.EntityId &&
-                x.ClientUpdatedAtUtc == change.ClientUpdatedAtUtc &&
-                x.Status == SyncStatus.Accepted, ct);
+                x.Status == SyncStatus.Accepted &&
+                entityIds.Contains(x.EntityId))
+            .Select(x => new { x.DeviceId, x.EntityId, x.ClientUpdatedAtUtc })
+            .ToListAsync(ct);
+        var alreadyAcceptedSet = alreadyAccepted
+            .Select(x => (x.DeviceId, x.EntityId, x.ClientUpdatedAtUtc))
+            .ToHashSet();
 
-            if (alreadyApplied)
+        var conflicts = new List<SyncConflictView>();
+        var acceptedCount = 0;
+        var cacheTagsToInvalidate = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var change in request.Changes)
+        {
+            if (alreadyAcceptedSet.Contains((change.DeviceId, change.EntityId, change.ClientUpdatedAtUtc)))
             {
                 acceptedCount++;
                 continue;
             }
 
-            var conflict = await DetectConflict(db, tenantId.Value, change, ct);
+            var conflict = DetectConflict(inventoryItems, saleEntities, change);
             if (conflict is null)
             {
-                var applied = await ApplyAcceptedChange(db, tenantId.Value, change, ct);
+                var applied = await ApplyAcceptedChange(db, tenantId.Value, inventoryItems, saleEntities, change, ct);
                 db.SyncChanges.Add(new SyncChange
                 {
                     TenantId = tenantId.Value,
@@ -92,6 +129,7 @@ public static class SyncEndpoints
                     Status = SyncStatus.Accepted
                 });
                 acceptedCount++;
+                CollectInvalidationTags(cacheTagsToInvalidate, tenantId.Value, change.EntityName);
             }
             else
             {
@@ -120,12 +158,14 @@ public static class SyncEndpoints
         }
 
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync(cacheTagsToInvalidate, ct);
         return Results.Ok(new SyncPushResponse(acceptedCount, conflicts));
     }
 
     private static async Task<IResult> PullChanges(
         [FromBody] SyncPullRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -136,12 +176,12 @@ public static class SyncEndpoints
             return Results.Unauthorized();
         }
 
-        var nowUtc = DateTime.UtcNow;
+        var nowUtc = SystemClock.Instance.GetCurrentInstant();
         var checkpoint = await db.DeviceCheckpoints
             .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.DeviceId == request.DeviceId, ct);
 
         var cursor = ParseCursor(request.Cursor);
-        var baseSinceUtc = request.SinceUtc ?? checkpoint?.LastPulledAtUtc ?? nowUtc.AddDays(-7);
+        var baseSinceUtc = request.SinceUtc ?? checkpoint?.LastPulledAtUtc ?? nowUtc - Duration.FromDays(7);
 
         var query = db.SyncChanges
             .Where(x =>
@@ -149,41 +189,55 @@ public static class SyncEndpoints
                 x.Status == SyncStatus.Accepted &&
                 x.DeviceId != request.DeviceId);
 
+        // Fixed: push the keyset predicate into SQL in both branches — no unbounded ToListAsync.
+        IQueryable<SyncChangeCursorEnvelope> pagedQuery;
         if (cursor is null)
         {
-            query = query.Where(x => x.ServerUpdatedAtUtc >= baseSinceUtc && x.ServerUpdatedAtUtc < nowUtc);
+            pagedQuery = query
+                .Where(x => x.ServerUpdatedAtUtc >= baseSinceUtc && x.ServerUpdatedAtUtc < nowUtc)
+                .OrderBy(x => x.ServerUpdatedAtUtc)
+                .ThenBy(x => x.Id)
+                .Select(x => new SyncChangeCursorEnvelope(
+                    x.Id,
+                    x.ServerUpdatedAtUtc,
+                    new SyncPushChange(
+                        x.DeviceId,
+                        x.EntityName,
+                        x.EntityId,
+                        x.Operation,
+                        x.PayloadJson,
+                        x.ClientUpdatedAtUtc,
+                        null)));
         }
         else
         {
-            query = query.Where(x => x.ServerUpdatedAtUtc >= cursor.ServerUpdatedAtUtc);
-        }
-
-        var orderedQuery = query
-            .OrderBy(x => x.ServerUpdatedAtUtc)
-            .ThenBy(x => x.Id)
-            .Select(x => new SyncChangeCursorEnvelope(
-                x.Id,
-                x.ServerUpdatedAtUtc,
-                new SyncPushChange(
-                    x.DeviceId,
-                    x.EntityName,
-                    x.EntityId,
-                    x.Operation,
-                    x.PayloadJson,
-                    x.ClientUpdatedAtUtc,
-                    null)));
-
-        var ordered = cursor is null
-            ? await orderedQuery.Take(MaxChangesPerPull + 1).ToListAsync(ct)
-            : (await orderedQuery.ToListAsync(ct))
+            // Keyset: rows strictly after cursor position, fully pushed to PostgreSQL.
+            pagedQuery = query
                 .Where(x =>
                     x.ServerUpdatedAtUtc > cursor.ServerUpdatedAtUtc ||
                     (x.ServerUpdatedAtUtc == cursor.ServerUpdatedAtUtc && x.Id.CompareTo(cursor.ChangeId) > 0))
-                .Take(MaxChangesPerPull + 1)
-                .ToList();
+                .OrderBy(x => x.ServerUpdatedAtUtc)
+                .ThenBy(x => x.Id)
+                .Select(x => new SyncChangeCursorEnvelope(
+                    x.Id,
+                    x.ServerUpdatedAtUtc,
+                    new SyncPushChange(
+                        x.DeviceId,
+                        x.EntityName,
+                        x.EntityId,
+                        x.Operation,
+                        x.PayloadJson,
+                        x.ClientUpdatedAtUtc,
+                        null)));
+        }
 
-        var hasMore = ordered.Count > MaxChangesPerPull;
-        var page = hasMore ? ordered.Take(MaxChangesPerPull).ToList() : ordered;
+        var page = await pagedQuery
+            .Take(MaxChangesPerPull + 1)
+            .ToListAsync(ct);
+
+        var hasMore = page.Count > MaxChangesPerPull;
+        if (hasMore) page = page.Take(MaxChangesPerPull).ToList();
+
         var last = page.LastOrDefault();
         var nextCursor = hasMore && last is not null ? EncodeCursor(last.ServerUpdatedAtUtc, last.Id) : null;
         var serverTimestampUtc = last?.ServerUpdatedAtUtc ?? nowUtc;
@@ -208,12 +262,33 @@ public static class SyncEndpoints
         return Results.Ok(new SyncPullResponse(serverTimestampUtc, page.Select(x => x.Change).ToList(), hasMore, nextCursor));
     }
 
-    private static async Task<ConflictInfo?> DetectConflict(ShopkeeperDbContext db, Guid tenantId, SyncPushChange change, CancellationToken ct)
+    private static void CollectInvalidationTags(ISet<string> tags, Guid tenantId, string entityName)
+    {
+        if (entityName == nameof(InventoryItem))
+        {
+            tags.Add(ApiCacheTags.Inventory(tenantId));
+            tags.Add(ApiCacheTags.Reports(tenantId));
+            return;
+        }
+
+        if (entityName == nameof(Sale))
+        {
+            tags.Add(ApiCacheTags.Inventory(tenantId));
+            tags.Add(ApiCacheTags.Sales(tenantId));
+            tags.Add(ApiCacheTags.Credits(tenantId));
+            tags.Add(ApiCacheTags.Reports(tenantId));
+        }
+    }
+
+    // Fixed: uses pre-loaded dictionaries — no DB round-trip per change.
+    private static ConflictInfo? DetectConflict(
+        Dictionary<Guid, InventoryItem> inventoryItems,
+        Dictionary<Guid, Sale> sales,
+        SyncPushChange change)
     {
         if (change.EntityName == nameof(InventoryItem))
         {
-            var item = await db.InventoryItems.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == change.EntityId, ct);
-            if (item is null)
+            if (!inventoryItems.TryGetValue(change.EntityId, out var item))
             {
                 return change.Operation is SyncOperation.Update or SyncOperation.Delete
                     ? new ConflictInfo("Inventory item no longer exists on server.", null, null)
@@ -245,8 +320,7 @@ public static class SyncEndpoints
 
         if (change.EntityName == nameof(Sale))
         {
-            var sale = await db.Sales.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == change.EntityId, ct);
-            if (sale is null)
+            if (!sales.TryGetValue(change.EntityId, out var sale))
             {
                 return change.Operation is SyncOperation.Update or SyncOperation.Delete
                     ? new ConflictInfo("Sale no longer exists on server.", null, null)
@@ -279,7 +353,13 @@ public static class SyncEndpoints
         return null;
     }
 
-    private static async Task<AppliedSyncChange> ApplyAcceptedChange(ShopkeeperDbContext db, Guid tenantId, SyncPushChange change, CancellationToken ct)
+    private static async Task<AppliedSyncChange> ApplyAcceptedChange(
+        ShopkeeperDbContext db,
+        Guid tenantId,
+        Dictionary<Guid, InventoryItem> inventoryItems,
+        Dictionary<Guid, Sale> sales,
+        SyncPushChange change,
+        CancellationToken ct)
     {
         if (change.EntityName != nameof(InventoryItem))
         {
@@ -288,17 +368,23 @@ public static class SyncEndpoints
 
         return change.Operation switch
         {
-            SyncOperation.Update => await ApplyInventoryUpdate(db, tenantId, change, ct),
-            SyncOperation.Delete => await ApplyInventoryDelete(db, tenantId, change, ct),
+            SyncOperation.Update => await ApplyInventoryUpdate(db, tenantId, inventoryItems, change, ct),
+            SyncOperation.Delete => await ApplyInventoryDelete(db, tenantId, inventoryItems, change, ct),
             _ => new AppliedSyncChange(change.Operation, change.PayloadJson)
         };
     }
 
-    private static async Task<AppliedSyncChange> ApplyInventoryUpdate(ShopkeeperDbContext db, Guid tenantId, SyncPushChange change, CancellationToken ct)
+    private static async Task<AppliedSyncChange> ApplyInventoryUpdate(
+        ShopkeeperDbContext db,
+        Guid tenantId,
+        Dictionary<Guid, InventoryItem> inventoryItems,
+        SyncPushChange change,
+        CancellationToken ct)
     {
-        var item = await db.InventoryItems
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == change.EntityId && !x.IsDeleted, ct)
-            ?? throw new InvalidOperationException("Inventory item was not found for sync update.");
+        if (!inventoryItems.TryGetValue(change.EntityId, out var item) || item.IsDeleted)
+        {
+            throw new InvalidOperationException("Inventory item was not found for sync update.");
+        }
 
         var payload = SyncJson.Deserialize<CreateInventoryItemRequest>(change.PayloadJson)
             ?? throw new InvalidOperationException("Inventory sync payload could not be parsed.");
@@ -313,7 +399,7 @@ public static class SyncEndpoints
         item.ItemType = payload.ItemType;
         item.ConditionGrade = payload.ConditionGrade;
         item.ConditionNotes = payload.ConditionNotes;
-        item.UpdatedAtUtc = DateTime.UtcNow;
+        item.UpdatedAtUtc = SystemClock.Instance.GetCurrentInstant();
 
         db.AuditLogs.Add(new AuditLog
         {
@@ -324,22 +410,26 @@ public static class SyncEndpoints
             PayloadJson = SyncJson.Serialize(new { item.Id, item.ProductName, item.Quantity, source = "device-sync" })
         });
 
+        // SaveChanges here so ApplyMutableEntityUpdates sets the new RowVersion before we
+        // capture it in the snapshot payload sent back to other devices.
         await db.SaveChangesAsync(ct);
         return new AppliedSyncChange(SyncOperation.Update, BuildInventorySnapshotPayload(item));
     }
 
-    private static async Task<AppliedSyncChange> ApplyInventoryDelete(ShopkeeperDbContext db, Guid tenantId, SyncPushChange change, CancellationToken ct)
+    private static async Task<AppliedSyncChange> ApplyInventoryDelete(
+        ShopkeeperDbContext db,
+        Guid tenantId,
+        Dictionary<Guid, InventoryItem> inventoryItems,
+        SyncPushChange change,
+        CancellationToken ct)
     {
-        var item = await db.InventoryItems
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == change.EntityId, ct);
-
-        if (item is null)
+        if (!inventoryItems.TryGetValue(change.EntityId, out var item))
         {
             return new AppliedSyncChange(SyncOperation.Delete, "{}");
         }
 
         item.IsDeleted = true;
-        item.UpdatedAtUtc = DateTime.UtcNow;
+        item.UpdatedAtUtc = SystemClock.Instance.GetCurrentInstant();
 
         db.AuditLogs.Add(new AuditLog
         {
@@ -363,7 +453,7 @@ public static class SyncEndpoints
             modelNumber = item.ModelNumber,
             serialNumber = item.SerialNumber,
             quantity = item.Quantity,
-            expiryDate = item.ExpiryDate?.ToString("yyyy-MM-dd"),
+            expiryDate = item.ExpiryDate?.ToString("uuuu-MM-dd", null),
             costPrice = item.CostPrice,
             sellingPrice = item.SellingPrice,
             itemType = (int)item.ItemType,
@@ -403,9 +493,9 @@ public static class SyncEndpoints
         };
     }
 
-    private static string EncodeCursor(DateTime updatedAtUtc, Guid changeId)
+    private static string EncodeCursor(Instant updatedAtUtc, Guid changeId)
     {
-        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{updatedAtUtc.Ticks}|{changeId}"));
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{updatedAtUtc.ToUnixTimeTicks()}|{changeId}"));
     }
 
     private static SyncCursor? ParseCursor(string? cursor)
@@ -425,7 +515,7 @@ public static class SyncEndpoints
             }
 
             return long.TryParse(parts[0], out var ticks) && Guid.TryParse(parts[1], out var changeId)
-                ? new SyncCursor(new DateTime(ticks, DateTimeKind.Utc), changeId)
+                ? new SyncCursor(Instant.FromUnixTimeTicks(ticks), changeId)
                 : null;
         }
         catch
@@ -436,6 +526,6 @@ public static class SyncEndpoints
 
     private sealed record ConflictInfo(string Reason, string? ServerPayloadJson, string? ServerRowVersionBase64);
     private sealed record AppliedSyncChange(SyncOperation Operation, string PayloadJson);
-    private sealed record SyncChangeCursorEnvelope(Guid Id, DateTime ServerUpdatedAtUtc, SyncPushChange Change);
-    private sealed record SyncCursor(DateTime ServerUpdatedAtUtc, Guid ChangeId);
+    private sealed record SyncChangeCursorEnvelope(Guid Id, Instant ServerUpdatedAtUtc, SyncPushChange Change);
+    private sealed record SyncCursor(Instant ServerUpdatedAtUtc, Guid ChangeId);
 }

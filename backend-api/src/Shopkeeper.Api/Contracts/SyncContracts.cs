@@ -1,3 +1,4 @@
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Contracts;
@@ -8,7 +9,7 @@ public sealed record SyncPushChange(
     Guid EntityId,
     SyncOperation Operation,
     string PayloadJson,
-    DateTime ClientUpdatedAtUtc,
+    Instant ClientUpdatedAtUtc,
     string? RowVersionBase64);
 
 public sealed record SyncPushRequest(List<SyncPushChange> Changes);
@@ -23,6 +24,6 @@ public sealed record SyncConflictView(
 
 public sealed record SyncPushResponse(int AcceptedCount, List<SyncConflictView> Conflicts);
 
-public sealed record SyncPullRequest(string DeviceId, DateTime? SinceUtc, string? Cursor = null);
+public sealed record SyncPullRequest(string DeviceId, Instant? SinceUtc, string? Cursor = null);
 
-public sealed record SyncPullResponse(DateTime ServerTimestampUtc, List<SyncPushChange> Changes, bool HasMore, string? NextCursor);
+public sealed record SyncPullResponse(Instant ServerTimestampUtc, List<SyncPushChange> Changes, bool HasMore, string? NextCursor);

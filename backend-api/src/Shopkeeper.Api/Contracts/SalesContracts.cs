@@ -1,3 +1,4 @@
+using NodaTime;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Contracts;
@@ -11,7 +12,7 @@ public sealed record CreateSaleRequest(
     string? CustomerPhone,
     decimal DiscountAmount,
     bool IsCredit,
-    DateTime? DueDateUtc,
+    Instant? DueDateUtc,
     List<SaleLineRequest> Lines,
     List<SalePaymentRequest>? InitialPayments,
     string? ClientRequestId = null);
@@ -19,7 +20,7 @@ public sealed record CreateSaleRequest(
 public sealed record AddSalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference, string? Note, string? ClientRequestId = null);
 
 public sealed record SaleLineView(Guid Id, Guid InventoryItemId, string ProductNameSnapshot, int Quantity, decimal UnitPrice, decimal LineTotal);
-public sealed record SalePaymentView(Guid Id, string Method, decimal Amount, string? Reference, DateTime CreatedAtUtc);
+public sealed record SalePaymentView(Guid Id, string Method, decimal Amount, string? Reference, Instant CreatedAtUtc);
 
 public sealed record SaleDetailResponse(
     Guid Id,
@@ -33,9 +34,9 @@ public sealed record SaleDetailResponse(
     decimal OutstandingAmount,
     string Status,
     bool IsCredit,
-    DateTime? DueDateUtc,
+    Instant? DueDateUtc,
     bool IsVoided,
-    DateTime UpdatedAtUtc,
+    Instant UpdatedAtUtc,
     IReadOnlyList<SaleLineView> Lines,
     IReadOnlyList<SalePaymentView> Payments);
 
@@ -44,7 +45,7 @@ public sealed record ReceiptLineView(string ProductName, int Quantity, decimal U
 public sealed record ReceiptView(
     Guid SaleId,
     string SaleNumber,
-    DateTime CreatedAtUtc,
+    Instant CreatedAtUtc,
     string ShopName,
     string? CustomerName,
     decimal Subtotal,

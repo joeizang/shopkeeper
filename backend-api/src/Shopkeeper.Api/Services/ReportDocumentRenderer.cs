@@ -1,5 +1,6 @@
 using System.Text;
 using System.IO.Compression;
+using NodaTime;
 
 namespace Shopkeeper.Api.Services;
 
@@ -59,7 +60,7 @@ public sealed class ReportDocumentRenderer
 
     public byte[] RenderSimplePdf(string title, IEnumerable<string> lines)
     {
-        var textLines = new List<string> { title, "Generated: " + DateTime.UtcNow.ToString("u"), string.Empty };
+        var textLines = new List<string> { title, "Generated: " + SystemClock.Instance.GetCurrentInstant().ToString("g", null), string.Empty };
         textLines.AddRange(lines);
 
         var y = 800;

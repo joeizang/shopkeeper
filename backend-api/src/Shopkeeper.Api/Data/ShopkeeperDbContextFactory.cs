@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
-using Shopkeeper.Api.Infrastructure;
 
 namespace Shopkeeper.Api.Data;
 
@@ -8,32 +7,12 @@ public sealed class ShopkeeperDbContextFactory : IDesignTimeDbContextFactory<Sho
 {
     public ShopkeeperDbContext CreateDbContext(string[] args)
     {
+        // Reads CONNECTIONSTRINGS__DEFAULT from environment, or falls back to a local dev default.
+        var connectionString = Environment.GetEnvironmentVariable("CONNECTIONSTRINGS__DEFAULT")
+            ?? "Host=192.168.0.5;Port=5432;Database=shopkeeper;Username=postgres;Password=postgres";
+
         var optionsBuilder = new DbContextOptionsBuilder<ShopkeeperDbContext>();
-        var contentRoot = ResolveContentRoot();
-        var connectionString = SqliteConnectionStringResolver.Resolve("Data Source=shopkeeper.db", contentRoot);
-        optionsBuilder.UseSqlite(connectionString);
+        optionsBuilder.UseNpgsql(connectionString, o => o.UseNodaTime());
         return new ShopkeeperDbContext(optionsBuilder.Options);
-    }
-
-    private static string ResolveContentRoot()
-    {
-        var current = AppContext.BaseDirectory;
-        for (var i = 0; i < 6; i++)
-        {
-            if (File.Exists(Path.Combine(current, "Shopkeeper.Api.csproj")))
-            {
-                return current;
-            }
-
-            var parent = Directory.GetParent(current);
-            if (parent is null)
-            {
-                break;
-            }
-
-            current = parent.FullName;
-        }
-
-        return Directory.GetCurrentDirectory();
     }
 }

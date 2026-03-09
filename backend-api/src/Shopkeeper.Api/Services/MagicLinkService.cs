@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Options;
+using NodaTime;
 using Shopkeeper.Api.Infrastructure;
 
 namespace Shopkeeper.Api.Services;
@@ -14,11 +15,11 @@ public sealed class MagicLinkService
         _options = options.Value;
     }
 
-    public (string token, string hash, DateTime expiresAtUtc) CreateToken()
+    public (string token, string hash, Instant expiresAtUtc) CreateToken()
     {
         var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
         var hash = ComputeSha256(token);
-        var expiresAt = DateTime.UtcNow.AddMinutes(Math.Max(5, _options.ExpiryMinutes));
+        var expiresAt = SystemClock.Instance.GetCurrentInstant() + Duration.FromMinutes(Math.Max(5, _options.ExpiryMinutes));
         return (token, hash, expiresAt);
     }
 

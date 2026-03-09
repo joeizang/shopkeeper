@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Infrastructure;
@@ -31,7 +32,7 @@ public static class ReportsEndpoints
     }
 
     private static async Task<IResult> GetInventoryReport(
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -39,14 +40,14 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var report = await reporting.BuildInventoryReport(tenantId.Value, ct);
-        return Results.Ok(report);
+        var cached = await reads.GetInventoryReportAsync(tenantId.Value, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> GetSalesReport(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -54,20 +55,20 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var range = ResolveDateRange(from, to);
+        var range = DateRangeParser.Resolve(from, to);
         if (range.error is not null)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
         }
 
-        var report = await reporting.BuildSalesReport(tenantId.Value, range.fromUtc, range.toUtc, ct);
-        return Results.Ok(report);
+        var cached = await reads.GetSalesReportAsync(tenantId.Value, range.fromUtc, range.toUtc, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> GetProfitLossReport(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -75,20 +76,20 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var range = ResolveDateRange(from, to);
+        var range = DateRangeParser.Resolve(from, to);
         if (range.error is not null)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
         }
 
-        var report = await reporting.BuildProfitLossReport(tenantId.Value, range.fromUtc, range.toUtc, ct);
-        return Results.Ok(report);
+        var cached = await reads.GetProfitLossReportAsync(tenantId.Value, range.fromUtc, range.toUtc, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> GetCreditorsReport(
         [FromQuery] string? from,
         [FromQuery] string? to,
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -96,20 +97,17 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var fromUtc = ParseDateStart(from);
-        var toUtc = ParseDateEnd(to);
+        var fromUtc = DateRangeParser.ParseDateStart(from);
+        var toUtc = DateRangeParser.ParseDateEnd(to);
         if ((from is not null && !fromUtc.HasValue) || (to is not null && !toUtc.HasValue))
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = ["Invalid date format. Use YYYY-MM-DD."] });
         }
 
-        var report = await reporting.BuildCreditorsReport(tenantId.Value, fromUtc, toUtc, ct);
-        return Results.Ok(report);
+        var cached = await reads.GetCreditorsReportAsync(tenantId.Value, fromUtc, toUtc, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
-    // ExportReport queues an async job and returns 202 Accepted with the job ID.
-    // Poll GET /api/v1/reports/jobs/{id} until Status == "Completed", then download
-    // the file via GET /api/v1/reports/files/{fileId}/download.
     private static async Task<IResult> ExportReport(
         string reportType,
         [FromQuery] string? format,
@@ -143,11 +141,11 @@ public static class ReportsEndpoints
             return Results.Forbid();
         }
 
-        DateTime? fromUtc = null;
-        DateTime? toUtc = null;
+        Instant? fromUtc = null;
+        Instant? toUtc = null;
         if (normalizedType is "sales" or "profit-loss")
         {
-            var range = ResolveDateRange(from, to);
+            var range = DateRangeParser.Resolve(from, to);
             if (range.error is not null)
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
@@ -157,8 +155,8 @@ public static class ReportsEndpoints
         }
         else if (normalizedType == "creditors")
         {
-            fromUtc = ParseDateStart(from);
-            toUtc = ParseDateEnd(to);
+            fromUtc = DateRangeParser.ParseDateStart(from);
+            toUtc = DateRangeParser.ParseDateEnd(to);
             if ((from is not null && !fromUtc.HasValue) || (to is not null && !toUtc.HasValue))
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = ["Invalid date format. Use YYYY-MM-DD."] });
@@ -170,7 +168,7 @@ public static class ReportsEndpoints
     }
 
     private static async Task<IResult> GetReportJobs(
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -178,8 +176,8 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var jobs = await reporting.ListReportJobs(tenantId.Value, ct);
-        return Results.Ok(jobs);
+        var cached = await reads.GetReportJobsAsync(tenantId.Value, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> QueueReportJob(
@@ -195,10 +193,11 @@ public static class ReportsEndpoints
 
         var normalizedType = request.ReportType.Trim().ToLowerInvariant();
         var normalizedFormat = request.Format.Trim().ToLowerInvariant();
-        if (normalizedFormat is not ("pdf" or "spreadsheet"))
+        if (normalizedFormat is not ("pdf" or "spreadsheet" or "csv" or "xlsx"))
         {
-            return Results.ValidationProblem(new Dictionary<string, string[]> { ["format"] = ["Use pdf or spreadsheet."] });
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["format"] = ["Use pdf, spreadsheet, csv, or xlsx."] });
         }
+        var canonicalFormat = normalizedFormat is "pdf" ? "pdf" : "spreadsheet";
 
         if (normalizedType is not ("inventory" or "sales" or "profit-loss" or "creditors"))
         {
@@ -215,7 +214,7 @@ public static class ReportsEndpoints
             tenantId.Value,
             userId.Value,
             normalizedType,
-            normalizedFormat,
+            canonicalFormat,
             request.FromUtc,
             request.ToUtc,
             ct);
@@ -225,7 +224,7 @@ public static class ReportsEndpoints
 
     private static async Task<IResult> GetReportJob(
         Guid id,
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -233,10 +232,10 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var job = await reporting.GetReportJob(tenantId.Value, id, ct);
-        return job is null
+        var cached = await reads.GetReportJobAsync(tenantId.Value, id, ct);
+        return cached.Value is null
             ? Results.NotFound()
-            : Results.Ok(new ReportJobView(job.Id, job.ReportType, job.Format, job.Status, job.FilterJson, job.ReportFileId, job.RequestedAtUtc, job.CompletedAtUtc, job.FailureReason));
+            : HttpCacheResults.OkOrNotModified(httpContext, cached!);
     }
 
     private static async Task<IResult> RetryReportJob(
@@ -256,7 +255,7 @@ public static class ReportsEndpoints
     }
 
     private static async Task<IResult> GetReportFiles(
-        ReportingService reporting,
+        ReportingReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -264,8 +263,8 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var files = await reporting.ListReportFiles(tenantId.Value, ct);
-        return Results.Ok(files);
+        var cached = await reads.GetReportFilesAsync(tenantId.Value, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> DownloadReportFile(
@@ -279,60 +278,17 @@ public static class ReportsEndpoints
         if (!tenantId.HasValue) return Results.Unauthorized();
 
         var file = await reporting.GetReportFile(tenantId.Value, id, ct);
-        return file is null
-            ? Results.NotFound()
-            : Results.File(file.Content, file.ContentType, file.FileName);
-    }
-
-    private static (DateTime fromUtc, DateTime toUtc, string? error) ResolveDateRange(string? fromRaw, string? toRaw)
-    {
-        var defaultFrom = DateTime.UtcNow.Date.AddDays(-30);
-        var defaultTo = DateTime.UtcNow.Date.AddDays(1).AddTicks(-1);
-        var from = ParseDateStart(fromRaw) ?? defaultFrom;
-        var to = ParseDateEnd(toRaw) ?? defaultTo;
-        if (from > to)
+        if (file is null)
         {
-            return (defaultFrom, defaultTo, "'from' date must be before or equal to 'to' date.");
+            return Results.NotFound();
         }
 
-        return (from, to, null);
+        return HttpCacheResults.FileOrNotModified(
+            httpContext,
+            file.Content,
+            file.ContentType,
+            file.FileName,
+            ETagUtility.CreateStrong(file.Content));
     }
 
-    private static DateTime? ParseDateStart(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        if (DateOnly.TryParse(value, out var dateOnly))
-        {
-            return dateOnly.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-        }
-        return null;
-    }
-
-    private static DateTime? ParseDateEnd(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return null;
-        if (DateOnly.TryParse(value, out var dateOnly))
-        {
-            return dateOnly.ToDateTime(TimeOnly.MaxValue, DateTimeKind.Utc);
-        }
-        return null;
-    }
-
-    private static ExportKind? NormalizeFormat(string? format)
-    {
-        return format?.Trim().ToLowerInvariant() switch
-        {
-            "pdf" => ExportKind.Pdf,
-            "spreadsheet" => ExportKind.Spreadsheet,
-            "csv" => ExportKind.Spreadsheet,
-            "xlsx" => ExportKind.Spreadsheet,
-            _ => null
-        };
-    }
-
-    private enum ExportKind
-    {
-        Pdf,
-        Spreadsheet
-    }
 }

@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace Shopkeeper.Api.Contracts;
 
 public sealed record AccountProfileResponse(
@@ -8,7 +10,7 @@ public sealed record AccountProfileResponse(
     string? AvatarUrl,
     string? PreferredLanguage,
     string? Timezone,
-    DateTime CreatedAtUtc);
+    Instant CreatedAtUtc);
 
 public sealed record UpdateAccountProfileRequest(
     string FullName,
@@ -23,9 +25,9 @@ public sealed record SessionView(
     string Role,
     string? DeviceId,
     string? DeviceName,
-    DateTime CreatedAtUtc,
-    DateTime ExpiresAtUtc,
-    DateTime? LastSeenAtUtc,
+    Instant CreatedAtUtc,
+    Instant ExpiresAtUtc,
+    Instant? LastSeenAtUtc,
     bool IsRevoked);
 
 public sealed record LinkedIdentityView(
@@ -33,5 +35,5 @@ public sealed record LinkedIdentityView(
     string ProviderSubject,
     string? Email,
     bool EmailVerified,
-    DateTime CreatedAtUtc,
-    DateTime LastUsedAtUtc);
+    Instant CreatedAtUtc,
+    Instant LastUsedAtUtc);

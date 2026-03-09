@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -106,7 +107,7 @@ public static class AuthEndpoints
             ExpiresAtUtc = refreshTokenTuple.expiresAtUtc,
             DeviceId = device.deviceId,
             DeviceName = device.deviceName,
-            LastSeenAtUtc = DateTime.UtcNow
+            LastSeenAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
 
         db.AuditLogs.Add(new AuditLog
@@ -168,7 +169,7 @@ public static class AuthEndpoints
             ExpiresAtUtc = refreshTokenTuple.expiresAtUtc,
             DeviceId = device.deviceId,
             DeviceName = device.deviceName,
-            LastSeenAtUtc = DateTime.UtcNow
+            LastSeenAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
 
         db.AuditLogs.Add(new AuditLog
@@ -200,13 +201,13 @@ public static class AuthEndpoints
 
         if (refreshToken is null
             || refreshToken.RevokedAtUtc.HasValue
-            || refreshToken.ExpiresAtUtc <= DateTime.UtcNow
+            || refreshToken.ExpiresAtUtc <= SystemClock.Instance.GetCurrentInstant()
             || !refreshToken.ShopMembership.IsActive)
         {
             return Results.Unauthorized();
         }
 
-        refreshToken.RevokedAtUtc = DateTime.UtcNow;
+        refreshToken.RevokedAtUtc = SystemClock.Instance.GetCurrentInstant();
 
         var newRefresh = tokenService.GenerateRefreshToken();
         db.RefreshTokens.Add(new RefreshToken
@@ -217,7 +218,7 @@ public static class AuthEndpoints
             ExpiresAtUtc = newRefresh.expiresAtUtc,
             DeviceId = refreshToken.DeviceId,
             DeviceName = refreshToken.DeviceName,
-            LastSeenAtUtc = DateTime.UtcNow
+            LastSeenAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
 
         db.AuditLogs.Add(new AuditLog
@@ -288,7 +289,7 @@ public static class AuthEndpoints
             ShopMembershipId = membership.Id,
             TokenHash = refreshTokenTuple.hash,
             ExpiresAtUtc = refreshTokenTuple.expiresAtUtc,
-            LastSeenAtUtc = DateTime.UtcNow
+            LastSeenAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
 
         db.AuditLogs.Add(new AuditLog
@@ -324,9 +325,9 @@ public static class AuthEndpoints
             });
         }
 
-        var now = DateTime.UtcNow;
+        var now = SystemClock.Instance.GetCurrentInstant();
         var recentRequests = await db.MagicLinkChallenges.CountAsync(
-            x => x.Email == email && x.RequestedAtUtc >= now.AddMinutes(-1), ct);
+            x => x.Email == email && x.RequestedAtUtc >= now - Duration.FromMinutes(1), ct);
         if (recentRequests >= Math.Max(1, options.Value.MaxRequestsPerMinutePerEmail))
         {
             return Results.StatusCode(StatusCodes.Status429TooManyRequests);
@@ -340,7 +341,7 @@ public static class AuthEndpoints
         {
             return Results.Accepted(
                 "/api/v1/auth/magic-link/verify",
-                new MagicLinkRequestResponse(Guid.Empty, now.AddMinutes(options.Value.ExpiryMinutes), "If this email is registered, a sign-in link has been queued.", null));
+                new MagicLinkRequestResponse(Guid.Empty, now + Duration.FromMinutes(options.Value.ExpiryMinutes), "If this email is registered, a sign-in link has been queued.", null));
         }
 
         var token = magicLinkService.CreateToken();
@@ -406,7 +407,7 @@ public static class AuthEndpoints
         }
 
         var hash = magicLinkService.ComputeSha256(request.Token);
-        var now = DateTime.UtcNow;
+        var now = SystemClock.Instance.GetCurrentInstant();
         var challenge = await db.MagicLinkChallenges
             .Include(x => x.UserAccount)
             .FirstOrDefaultAsync(x =>
@@ -527,7 +528,7 @@ public static class AuthEndpoints
                 ProviderSubject = providerSubject,
                 Email = email,
                 EmailVerified = emailVerified,
-                LastUsedAtUtc = DateTime.UtcNow
+                LastUsedAtUtc = SystemClock.Instance.GetCurrentInstant()
             });
             return;
         }
@@ -535,7 +536,7 @@ public static class AuthEndpoints
         identity.UserAccountId = userId;
         identity.Email = email;
         identity.EmailVerified = emailVerified;
-        identity.LastUsedAtUtc = DateTime.UtcNow;
+        identity.LastUsedAtUtc = SystemClock.Instance.GetCurrentInstant();
     }
 
     private static (string? deviceId, string? deviceName) ReadDevice(HttpContext httpContext)

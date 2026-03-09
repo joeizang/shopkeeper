@@ -2,17 +2,17 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Infrastructure;
+using Shopkeeper.Api.Services;
 
 namespace Shopkeeper.Api.Endpoints;
 
 public static class InventoryEndpoints
 {
-    private const string ServerDeviceId = "server-api";
-
     public static IEndpointRouteBuilder MapInventoryEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/inventory")
@@ -32,6 +32,7 @@ public static class InventoryEndpoints
     private static async Task<IResult> CreateItem(
         [FromBody] CreateInventoryItemRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -75,34 +76,35 @@ public static class InventoryEndpoints
             Action = "inventory.create",
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
-            PayloadJson = $"{{\"productName\":\"{item.ProductName}\"}}"
+            // Fixed: was using string interpolation which could corrupt JSON if ProductName
+            // contained quotes or backslashes.
+            PayloadJson = JsonSerializer.Serialize(new { productName = item.ProductName })
         });
 
-        // First save so EF runs ApplyMutableEntityUpdates and populates RowVersion,
-        // then add the SyncChange (which needs the final RowVersion), all inside one transaction.
         await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
 
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
+            DeviceId = SyncConstants.ServerDeviceId,
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Create,
             PayloadJson = SyncJson.Serialize(ToView(item)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
+        await InvalidateInventoryCachesAsync(cache, tenantId.Value, ct);
 
         return Results.Created($"/api/v1/inventory/items/{item.Id}", ToView(item));
     }
 
     private static async Task<IResult> ListItems(
-        [FromQuery] int page,
-        [FromQuery] int limit,
-        ShopkeeperDbContext db,
+        [FromQuery] int? page,
+        [FromQuery] int? limit,
+        InventoryReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -113,39 +115,15 @@ public static class InventoryEndpoints
             return Results.Unauthorized();
         }
 
-        var effectivePage = Math.Max(1, page == 0 ? 1 : page);
-        var effectiveLimit = Math.Clamp(limit == 0 ? 100 : limit, 1, 200);
-
-        var query = db.InventoryItems
-            .Where(x => x.TenantId == tenantId.Value && !x.IsDeleted);
-
-        var total = await query.CountAsync(ct);
-        var items = await query
-            .OrderByDescending(x => x.CreatedAtUtc)
-            .Skip((effectivePage - 1) * effectiveLimit)
-            .Take(effectiveLimit)
-            .Select(x => new InventoryItemView(
-                x.Id,
-                x.ProductName,
-                x.ModelNumber,
-                x.SerialNumber,
-                x.Quantity,
-                x.ExpiryDate,
-                x.CostPrice,
-                x.SellingPrice,
-                x.ItemType,
-                x.ConditionGrade,
-                x.ConditionNotes,
-                x.Photos.Select(p => p.PhotoUri).ToList(),
-                x.RowVersion.Length == 0 ? string.Empty : Convert.ToBase64String(x.RowVersion)))
-            .ToListAsync(ct);
-
-        return Results.Ok(new { total, page = effectivePage, limit = effectiveLimit, items });
+        var effectivePage = Math.Max(1, page.GetValueOrDefault(1));
+        var effectiveLimit = Math.Clamp(limit.GetValueOrDefault(100), 1, 200);
+        var cached = await reads.ListItemsAsync(tenantId.Value, effectivePage, effectiveLimit, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
     }
 
     private static async Task<IResult> GetItem(
         Guid id,
-        ShopkeeperDbContext db,
+        InventoryReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -156,17 +134,17 @@ public static class InventoryEndpoints
             return Results.Unauthorized();
         }
 
-        var item = await db.InventoryItems
-            .Include(x => x.Photos)
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id && !x.IsDeleted, ct);
-
-        return item is null ? Results.NotFound() : Results.Ok(ToView(item));
+        var cached = await reads.GetItemAsync(tenantId.Value, id, ct);
+        return cached.Value is null
+            ? Results.NotFound()
+            : HttpCacheResults.OkOrNotModified(httpContext, cached!);
     }
 
     private static async Task<IResult> UpdateItem(
         Guid id,
         [FromBody] UpdateInventoryItemRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -221,15 +199,16 @@ public static class InventoryEndpoints
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
+            DeviceId = SyncConstants.ServerDeviceId,
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Update,
             PayloadJson = SyncJson.Serialize(ToView(item)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
         await db.SaveChangesAsync(ct);
         await tx.CommitAsync(ct);
+        await InvalidateInventoryCachesAsync(cache, tenantId.Value, ct);
         return Results.Ok(ToView(item));
     }
 
@@ -237,6 +216,7 @@ public static class InventoryEndpoints
         Guid id,
         [FromBody] AddItemPhotoRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -247,8 +227,10 @@ public static class InventoryEndpoints
             return Results.Unauthorized();
         }
 
-        var itemExists = await db.InventoryItems.AnyAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
-        if (!itemExists)
+        var item = await db.InventoryItems
+            .Include(x => x.Photos)
+            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
+        if (item is null)
         {
             return Results.NotFound();
         }
@@ -260,36 +242,35 @@ public static class InventoryEndpoints
             PhotoUri = request.PhotoUri
         };
 
+        // Fixed: single transaction wraps photo + audit + sync — no partial commits.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         db.ItemPhotos.Add(photo);
-        await db.SaveChangesAsync(ct);
-
-        var item = await db.InventoryItems
-            .Include(x => x.Photos)
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
-
-        if (item is not null)
+        db.AuditLogs.Add(new AuditLog
         {
-            db.AuditLogs.Add(new AuditLog
-            {
-                TenantId = tenantId.Value,
-                UserAccountId = tenant.GetUserId(httpContext.User),
-                Action = "inventory.photo.add",
-                EntityName = nameof(InventoryItem),
-                EntityId = item.Id,
-                PayloadJson = JsonSerializer.Serialize(new { photo.Id, photo.PhotoUri })
-            });
-            db.SyncChanges.Add(new SyncChange
-            {
-                TenantId = tenantId.Value,
-                DeviceId = ServerDeviceId,
-                EntityName = nameof(InventoryItem),
-                EntityId = item.Id,
-                Operation = SyncOperation.Update,
-                PayloadJson = SyncJson.Serialize(ToView(item)),
-                ClientUpdatedAtUtc = DateTime.UtcNow
-            });
-            await db.SaveChangesAsync(ct);
-        }
+            TenantId = tenantId.Value,
+            UserAccountId = tenant.GetUserId(httpContext.User),
+            Action = "inventory.photo.add",
+            EntityName = nameof(InventoryItem),
+            EntityId = item.Id,
+            PayloadJson = JsonSerializer.Serialize(new { photo.Id, photo.PhotoUri })
+        });
+
+        item.Photos.Add(photo); // add to in-memory collection so ToView reflects it
+        db.SyncChanges.Add(new SyncChange
+        {
+            TenantId = tenantId.Value,
+            DeviceId = SyncConstants.ServerDeviceId,
+            EntityName = nameof(InventoryItem),
+            EntityId = item.Id,
+            Operation = SyncOperation.Update,
+            PayloadJson = SyncJson.Serialize(ToView(item)),
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
+        });
+
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await InvalidateInventoryCachesAsync(cache, tenantId.Value, ct);
 
         return Results.Created($"/api/v1/inventory/items/{id}/photos/{photo.Id}", photo);
     }
@@ -298,6 +279,7 @@ public static class InventoryEndpoints
         Guid id,
         [FromQuery] string? rowVersionBase64,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -327,9 +309,10 @@ public static class InventoryEndpoints
             return Results.Conflict(new { message = "Conflict detected. Item has changed on server.", entityId = id });
         }
 
-        item.IsDeleted = true;
-        await db.SaveChangesAsync(ct);
+        // Fixed: single transaction wrapping soft-delete + audit + sync — no partial commits.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
 
+        item.IsDeleted = true;
         db.AuditLogs.Add(new AuditLog
         {
             TenantId = tenantId.Value,
@@ -342,14 +325,17 @@ public static class InventoryEndpoints
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
+            DeviceId = SyncConstants.ServerDeviceId,
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Delete,
             PayloadJson = SyncJson.Serialize(new { id = item.Id }),
-            ClientUpdatedAtUtc = DateTime.UtcNow
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
+
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await InvalidateInventoryCachesAsync(cache, tenantId.Value, ct);
 
         return Results.NoContent();
     }
@@ -357,6 +343,7 @@ public static class InventoryEndpoints
     private static async Task<IResult> CreateStockAdjustment(
         [FromBody] StockAdjustmentRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -384,6 +371,9 @@ public static class InventoryEndpoints
             CreatedByMembershipId = tenant.GetMembershipId(httpContext.User)
         };
 
+        // Fixed: single transaction wrapping quantity update + audit + sync.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
         db.StockAdjustments.Add(adjustment);
         await db.SaveChangesAsync(ct);
 
@@ -405,17 +395,22 @@ public static class InventoryEndpoints
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
+            DeviceId = SyncConstants.ServerDeviceId,
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Update,
             PayloadJson = SyncJson.Serialize(ToView(item)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        await InvalidateInventoryCachesAsync(cache, tenantId.Value, ct);
 
         return Results.Ok(new { itemId = item.Id, item.Quantity, adjustmentId = adjustment.Id });
     }
+
+    private static Task InvalidateInventoryCachesAsync(ApiCacheService cache, Guid tenantId, CancellationToken ct)
+        => cache.InvalidateTagsAsync([ApiCacheTags.Inventory(tenantId), ApiCacheTags.Reports(tenantId)], ct);
 
     private static InventoryItemView ToView(InventoryItem item)
         => new(

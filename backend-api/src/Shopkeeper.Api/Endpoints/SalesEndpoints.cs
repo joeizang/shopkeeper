@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -12,8 +13,6 @@ namespace Shopkeeper.Api.Endpoints;
 
 public static class SalesEndpoints
 {
-    private const string ServerDeviceId = "server-api";
-
     public static IEndpointRouteBuilder MapSalesEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/sales")
@@ -34,6 +33,7 @@ public static class SalesEndpoints
         ShopkeeperDbContext db,
         SaleCalculator calculator,
         IdempotencyService idempotency,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -51,7 +51,7 @@ public static class SalesEndpoints
             return Results.Unauthorized();
         }
 
-        var shop = await db.Shops.FirstOrDefaultAsync(x => x.Id == tenantId.Value, ct);
+        var shop = await db.Shops.AsNoTracking().FirstOrDefaultAsync(x => x.Id == tenantId.Value, ct);
         if (shop is null)
         {
             return Results.NotFound(new { message = "Shop not found." });
@@ -98,7 +98,7 @@ public static class SalesEndpoints
             var sale = new Sale
             {
                 TenantId = tenantId.Value,
-                SaleNumber = string.Empty,
+                SaleNumber = string.Empty, // set atomically inside the transaction below
                 CustomerName = request.CustomerName?.Trim(),
                 CustomerPhone = string.IsNullOrWhiteSpace(request.CustomerPhone) ? null : request.CustomerPhone.Trim(),
                 DiscountAmount = totals.DiscountAmount,
@@ -145,8 +145,17 @@ public static class SalesEndpoints
 
             await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-            var saleCount = await db.Sales.CountAsync(x => x.TenantId == tenantId.Value, ct);
-            sale.SaleNumber = $"SL-{DateTime.UtcNow:yyyyMMdd}-{saleCount + 1:0000}";
+            // Atomically upsert the per-tenant sale counter and retrieve the next sequence
+            // number. PostgreSQL's ON CONFLICT DO UPDATE is atomic — no race condition.
+            var seqRows = await db.Database.SqlQuery<int>($"""
+                INSERT INTO "TenantSaleCounters" ("TenantId", "NextSaleNumber")
+                VALUES ({tenantId.Value}, 1)
+                ON CONFLICT ("TenantId") DO UPDATE
+                    SET "NextSaleNumber" = "TenantSaleCounters"."NextSaleNumber" + 1
+                RETURNING "NextSaleNumber"
+                """).ToListAsync(ct);
+            var saleSeq = seqRows.Count > 0 ? seqRows[0] : 1;
+            sale.SaleNumber = $"SL-{SystemClock.Instance.GetCurrentInstant().ToDateTimeUtc():yyyyMMdd}-{saleSeq:0000}";
 
             db.Sales.Add(sale);
 
@@ -156,7 +165,7 @@ public static class SalesEndpoints
                 {
                     TenantId = tenantId.Value,
                     Sale = sale,
-                    DueDateUtc = request.DueDateUtc ?? DateTime.UtcNow.AddDays(30),
+                    DueDateUtc = request.DueDateUtc ?? SystemClock.Instance.GetCurrentInstant() + Duration.FromDays(30),
                     OutstandingAmount = outstanding,
                     Status = CreditStatus.Open
                 });
@@ -174,16 +183,17 @@ public static class SalesEndpoints
             db.SyncChanges.Add(new SyncChange
             {
                 TenantId = tenantId.Value,
-                DeviceId = ServerDeviceId,
+                DeviceId = SyncConstants.ServerDeviceId,
                 EntityName = nameof(Sale),
                 EntityId = sale.Id,
                 Operation = SyncOperation.Create,
                 PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
-                ClientUpdatedAtUtc = DateTime.UtcNow
+                ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
             });
 
             await db.SaveChangesAsync(ct);
             await tx.CommitAsync(ct);
+            await InvalidateSaleRelatedCachesAsync(cache, tenantId.Value, includeInventory: true, ct);
 
             var response = new { sale.Id, sale.SaleNumber, sale.TotalAmount, sale.OutstandingAmount };
             await idempotency.CompleteAsync(idem.Record!, StatusCodes.Status201Created, response, ct);
@@ -198,7 +208,7 @@ public static class SalesEndpoints
 
     private static async Task<IResult> GetSale(
         Guid id,
-        ShopkeeperDbContext db,
+        SaleReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -209,34 +219,10 @@ public static class SalesEndpoints
             return Results.Unauthorized();
         }
 
-        var sale = await db.Sales
-            .Include(x => x.Lines)
-            .Include(x => x.Payments)
-            .Include(x => x.CreditAccount)
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
-
-        if (sale is null)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(new SaleDetailResponse(
-            sale.Id,
-            sale.SaleNumber,
-            sale.CustomerName,
-            sale.CustomerPhone,
-            sale.Subtotal,
-            sale.VatAmount,
-            sale.DiscountAmount,
-            sale.TotalAmount,
-            sale.OutstandingAmount,
-            sale.Status.ToString(),
-            sale.IsCredit,
-            sale.DueDateUtc,
-            sale.IsVoided,
-            sale.UpdatedAtUtc,
-            sale.Lines.Select(x => new SaleLineView(x.Id, x.InventoryItemId, x.ProductNameSnapshot, x.Quantity, x.UnitPrice, x.LineTotal)).ToList(),
-            sale.Payments.Select(x => new SalePaymentView(x.Id, x.Method.ToString(), x.Amount, x.Reference, x.CreatedAtUtc)).ToList()));
+        var cached = await reads.GetSaleAsync(tenantId.Value, id, ct);
+        return cached.Value is null
+            ? Results.NotFound()
+            : HttpCacheResults.OkOrNotModified(httpContext, cached!);
     }
 
     private static async Task<IResult> AddPayment(
@@ -245,6 +231,7 @@ public static class SalesEndpoints
         ShopkeeperDbContext db,
         CreditLedgerService creditService,
         IdempotencyService idempotency,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -334,15 +321,16 @@ public static class SalesEndpoints
             db.SyncChanges.Add(new SyncChange
             {
                 TenantId = tenantId.Value,
-                DeviceId = ServerDeviceId,
+                DeviceId = SyncConstants.ServerDeviceId,
                 EntityName = nameof(Sale),
                 EntityId = sale.Id,
                 Operation = SyncOperation.Update,
                 PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
-                ClientUpdatedAtUtc = DateTime.UtcNow
+                ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
             });
 
             await db.SaveChangesAsync(ct);
+            await InvalidateSaleRelatedCachesAsync(cache, tenantId.Value, includeInventory: false, ct);
 
             var response = new
             {
@@ -364,6 +352,7 @@ public static class SalesEndpoints
     private static async Task<IResult> VoidSale(
         Guid id,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -417,15 +406,16 @@ public static class SalesEndpoints
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
+            DeviceId = SyncConstants.ServerDeviceId,
             EntityName = nameof(Sale),
             EntityId = sale.Id,
             Operation = SyncOperation.Update,
             PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
+            ClientUpdatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         });
 
         await db.SaveChangesAsync(ct);
+        await InvalidateSaleRelatedCachesAsync(cache, tenantId.Value, includeInventory: true, ct);
 
         return Results.Ok(new { saleId = sale.Id, status = "void" });
     }
@@ -444,6 +434,7 @@ public static class SalesEndpoints
         }
 
         var sale = await db.Sales
+            .AsNoTracking()
             .Include(x => x.Lines)
             .Include(x => x.Payments)
             .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
@@ -453,7 +444,7 @@ public static class SalesEndpoints
             return Results.NotFound();
         }
 
-        var shop = await db.Shops.FirstAsync(x => x.Id == tenantId.Value, ct);
+        var shop = await db.Shops.AsNoTracking().FirstAsync(x => x.Id == tenantId.Value, ct);
 
         var response = new ReceiptView(
             sale.Id,
@@ -495,7 +486,7 @@ public static class SalesEndpoints
             errors["discountAmount"] = ["Discount amount cannot be negative."];
         }
 
-        if (request.DueDateUtc.HasValue && request.DueDateUtc.Value < DateTime.UtcNow.Date)
+        if (request.DueDateUtc.HasValue && request.DueDateUtc.Value < SystemClock.Instance.GetCurrentInstant())
         {
             errors["dueDateUtc"] = ["Due date cannot be in the past."];
         }
@@ -528,6 +519,23 @@ public static class SalesEndpoints
         }
 
         return errors;
+    }
+
+    private static Task InvalidateSaleRelatedCachesAsync(ApiCacheService cache, Guid tenantId, bool includeInventory, CancellationToken ct)
+    {
+        var tags = new List<string>
+        {
+            ApiCacheTags.Sales(tenantId),
+            ApiCacheTags.Credits(tenantId),
+            ApiCacheTags.Reports(tenantId)
+        };
+
+        if (includeInventory)
+        {
+            tags.Add(ApiCacheTags.Inventory(tenantId));
+        }
+
+        return cache.InvalidateTagsAsync(tags, ct);
     }
 
     private static object BuildSaleSyncPayload(Sale sale)

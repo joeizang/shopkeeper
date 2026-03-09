@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
+using NodaTime;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
 using Shopkeeper.Api.Infrastructure;
@@ -19,7 +20,7 @@ public sealed record IdempotencyBeginResult(IdempotencyBeginStatus Status, Idemp
 
 public sealed class IdempotencyService(ShopkeeperDbContext db)
 {
-    private static readonly TimeSpan BucketWindow = TimeSpan.FromMinutes(10);
+    private static readonly long BucketWindowTicks = TimeSpan.FromMinutes(10).Ticks;
 
     public async Task<IdempotencyBeginResult> BeginAsync<TRequest>(
         Guid tenantId,
@@ -30,7 +31,7 @@ public sealed class IdempotencyService(ShopkeeperDbContext db)
         CancellationToken ct)
     {
         var key = BuildKey(scope, httpContext, request, clientRequestId);
-        var bucketKey = DateTime.UtcNow.Ticks / BucketWindow.Ticks;
+        var bucketKey = SystemClock.Instance.GetCurrentInstant().ToUnixTimeTicks() / BucketWindowTicks;
 
         var existing = await db.Set<IdempotencyRecord>()
             .FirstOrDefaultAsync(x =>
@@ -63,7 +64,7 @@ public sealed class IdempotencyService(ShopkeeperDbContext db)
             BucketKey = bucketKey,
             ResponseStatusCode = 0,
             ResponseJson = string.Empty,
-            CreatedAtUtc = DateTime.UtcNow
+            CreatedAtUtc = SystemClock.Instance.GetCurrentInstant()
         };
 
         db.Set<IdempotencyRecord>().Add(record);

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -10,9 +11,9 @@ namespace Shopkeeper.Api.Services;
 public enum UpdateExpenseStatus { Ok, NotFound, Conflict }
 public sealed record UpdateExpenseResult(UpdateExpenseStatus Status, ExpenseView? View);
 
-public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRenderer renderer, ReportJobChannel jobChannel)
+public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRenderer renderer, ReportJobChannel jobChannel, ApiCacheService cache)
 {
-    public async Task<IReadOnlyList<ExpenseView>> ListExpenses(Guid tenantId, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
+    public async Task<IReadOnlyList<ExpenseView>> ListExpenses(Guid tenantId, Instant? fromUtc, Instant? toUtc, CancellationToken ct)
     {
         var query = db.Expenses
             .Where(x => x.TenantId == tenantId)
@@ -56,7 +57,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         }).ToList();
 
         return new InventoryReportResponse(
-            GeneratedAtUtc: DateTime.UtcNow,
+            GeneratedAtUtc: SystemClock.Instance.GetCurrentInstant(),
             TotalProducts: rows.Count,
             TotalUnits: rows.Sum(x => x.Quantity),
             LowStockItems: rows.Count(x => x.Quantity <= 2),
@@ -65,7 +66,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             Items: rows);
     }
 
-    public async Task<SalesReportResponse> BuildSalesReport(Guid tenantId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public async Task<SalesReportResponse> BuildSalesReport(Guid tenantId, Instant fromUtc, Instant toUtc, CancellationToken ct)
     {
         var sales = await db.Sales
             .Include(x => x.Payments)
@@ -74,7 +75,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             .ToListAsync(ct);
 
         var daily = sales
-            .GroupBy(x => DateOnly.FromDateTime(x.CreatedAtUtc))
+            .GroupBy(x => x.CreatedAtUtc.InUtc().Date)
             .OrderBy(x => x.Key)
             .Select(g => new SalesDailySummaryRow(
                 g.Key,
@@ -91,7 +92,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             .ToList();
 
         return new SalesReportResponse(
-            GeneratedAtUtc: DateTime.UtcNow,
+            GeneratedAtUtc: SystemClock.Instance.GetCurrentInstant(),
             FromUtc: fromUtc,
             ToUtc: toUtc,
             SalesCount: sales.Count,
@@ -103,7 +104,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             Payments: payments);
     }
 
-    public async Task<ProfitLossReportResponse> BuildProfitLossReport(Guid tenantId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    public async Task<ProfitLossReportResponse> BuildProfitLossReport(Guid tenantId, Instant fromUtc, Instant toUtc, CancellationToken ct)
     {
         var revenue = await db.Sales
             .Where(x => x.TenantId == tenantId && !x.IsVoided && x.CreatedAtUtc >= fromUtc && x.CreatedAtUtc <= toUtc)
@@ -130,7 +131,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         var net = gross - expenses;
 
         return new ProfitLossReportResponse(
-            GeneratedAtUtc: DateTime.UtcNow,
+            GeneratedAtUtc: SystemClock.Instance.GetCurrentInstant(),
             FromUtc: fromUtc,
             ToUtc: toUtc,
             Revenue: revenue,
@@ -141,7 +142,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             ExpenseBreakdown: expensesByCategory);
     }
 
-    public async Task<CreditorsReportResponse> BuildCreditorsReport(Guid tenantId, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
+    public async Task<CreditorsReportResponse> BuildCreditorsReport(Guid tenantId, Instant? fromUtc, Instant? toUtc, CancellationToken ct)
     {
         var query = db.CreditAccounts
             .Include(x => x.Sale)
@@ -162,11 +163,11 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             .OrderBy(x => x.DueDateUtc)
             .ToListAsync(ct);
 
-        var nowDate = DateOnly.FromDateTime(DateTime.UtcNow);
+        var nowDate = SystemClock.Instance.GetCurrentInstant().InUtc().Date;
         var rows = accounts.Select(x =>
         {
-            var dueDate = DateOnly.FromDateTime(x.DueDateUtc);
-            var daysOverdue = Math.Max(0, nowDate.DayNumber - dueDate.DayNumber);
+            var dueDate = x.DueDateUtc.InUtc().Date;
+            var daysOverdue = Math.Max(0, Period.Between(dueDate, nowDate, PeriodUnits.Days).Days);
             var customerName = string.IsNullOrWhiteSpace(x.Sale.CustomerName) ? "Walk-in Customer" : x.Sale.CustomerName!;
             var summary = string.Join(", ", x.Sale.Lines.Select(l => $"{l.ProductNameSnapshot} x{l.Quantity}"));
 
@@ -183,7 +184,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         }).ToList();
 
         return new CreditorsReportResponse(
-            GeneratedAtUtc: DateTime.UtcNow,
+            GeneratedAtUtc: SystemClock.Instance.GetCurrentInstant(),
             FromUtc: fromUtc,
             ToUtc: toUtc,
             OpenCredits: rows.Count,
@@ -206,6 +207,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
         db.Expenses.Add(expense);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Expenses(tenantId), ApiCacheTags.Reports(tenantId)], ct);
         return ToView(expense);
     }
 
@@ -248,6 +250,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         }
 
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Expenses(tenantId), ApiCacheTags.Reports(tenantId)], ct);
         return new UpdateExpenseResult(UpdateExpenseStatus.Ok, ToView(expense));
     }
 
@@ -261,6 +264,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
         db.Expenses.Remove(expense);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Expenses(tenantId), ApiCacheTags.Reports(tenantId)], ct);
         return true;
     }
 
@@ -269,8 +273,8 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         Guid requestedByUserId,
         string reportType,
         string format,
-        DateTime? fromUtc,
-        DateTime? toUtc,
+        Instant? fromUtc,
+        Instant? toUtc,
         CancellationToken ct)
     {
         var job = new ReportJob
@@ -285,6 +289,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
         db.ReportJobs.Add(job);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Reports(tenantId)], ct);
         jobChannel.Writer.TryWrite(job.Id);
         return ToView(job);
     }
@@ -302,11 +307,18 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             return null;
         }
 
+        if (job.Status != ReportJobStatuses.Failed)
+        {
+            return null;
+        }
+
         job.Status = ReportJobStatuses.Pending;
         job.CompletedAtUtc = null;
         job.ReportFileId = null;
         job.FailureReason = null;
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Reports(tenantId)], ct);
+        jobChannel.Writer.TryWrite(job.Id);
         return ToView(job);
     }
 
@@ -351,14 +363,14 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         Guid tenantId,
         string reportType,
         string format,
-        DateTime? fromUtc,
-        DateTime? toUtc,
+        Instant? fromUtc,
+        Instant? toUtc,
         CancellationToken ct)
     {
         var exportKind = format.Equals("pdf", StringComparison.OrdinalIgnoreCase)
             ? ExportKind.Pdf
             : ExportKind.Spreadsheet;
-        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        var stamp = SystemClock.Instance.GetCurrentInstant().ToDateTimeUtc().ToString("yyyyMMddHHmmss");
         var normalizedType = reportType.Trim().ToLowerInvariant();
 
         return normalizedType switch
@@ -403,12 +415,13 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             FilterJson = filterJson,
             RequestedByUserAccountId = requestedByUserId,
             ReportFile = reportFile,
-            CompletedAtUtc = DateTime.UtcNow
+            CompletedAtUtc = SystemClock.Instance.GetCurrentInstant()
         };
 
         db.ReportFiles.Add(reportFile);
         db.ReportJobs.Add(reportJob);
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Reports(tenantId)], ct);
 
         return new ReportFileView(
             reportFile.Id,
@@ -469,17 +482,19 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
         job.ReportFileId = reportFile.Id;
         job.Status = ReportJobStatuses.Completed;
-        job.CompletedAtUtc = DateTime.UtcNow;
+        job.CompletedAtUtc = SystemClock.Instance.GetCurrentInstant();
         job.FailureReason = null;
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Reports(job.TenantId)], ct);
     }
 
     public async Task FailReportJob(ReportJob job, string reason, CancellationToken ct)
     {
         job.Status = ReportJobStatuses.Failed;
         job.FailureReason = reason;
-        job.CompletedAtUtc = DateTime.UtcNow;
+        job.CompletedAtUtc = SystemClock.Instance.GetCurrentInstant();
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.Reports(job.TenantId)], ct);
     }
 
     private async Task<(byte[] Content, string FileName, string ContentType)> BuildInventoryDocument(Guid tenantId, ExportKind exportKind, string stamp, CancellationToken ct)
@@ -490,7 +505,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             : (renderer.RenderSpreadsheet(InventoryCsvRows(report), "Inventory"), $"inventory-report-{stamp}.xlsx", ReportDocumentRenderer.XlsxMimeType);
     }
 
-    private async Task<(byte[] Content, string FileName, string ContentType)> BuildSalesDocument(Guid tenantId, ExportKind exportKind, string stamp, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
+    private async Task<(byte[] Content, string FileName, string ContentType)> BuildSalesDocument(Guid tenantId, ExportKind exportKind, string stamp, Instant? fromUtc, Instant? toUtc, CancellationToken ct)
     {
         var range = NormalizeDateRange(fromUtc, toUtc);
         var report = await BuildSalesReport(tenantId, range.FromUtc, range.ToUtc, ct);
@@ -499,7 +514,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             : (renderer.RenderSpreadsheet(SalesCsvRows(report), "Sales"), $"sales-report-{stamp}.xlsx", ReportDocumentRenderer.XlsxMimeType);
     }
 
-    private async Task<(byte[] Content, string FileName, string ContentType)> BuildProfitLossDocument(Guid tenantId, ExportKind exportKind, string stamp, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
+    private async Task<(byte[] Content, string FileName, string ContentType)> BuildProfitLossDocument(Guid tenantId, ExportKind exportKind, string stamp, Instant? fromUtc, Instant? toUtc, CancellationToken ct)
     {
         var range = NormalizeDateRange(fromUtc, toUtc);
         var report = await BuildProfitLossReport(tenantId, range.FromUtc, range.ToUtc, ct);
@@ -508,7 +523,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             : (renderer.RenderSpreadsheet(ProfitLossCsvRows(report), "ProfitLoss"), $"profit-loss-report-{stamp}.xlsx", ReportDocumentRenderer.XlsxMimeType);
     }
 
-    private async Task<(byte[] Content, string FileName, string ContentType)> BuildCreditorsDocument(Guid tenantId, ExportKind exportKind, string stamp, DateTime? fromUtc, DateTime? toUtc, CancellationToken ct)
+    private async Task<(byte[] Content, string FileName, string ContentType)> BuildCreditorsDocument(Guid tenantId, ExportKind exportKind, string stamp, Instant? fromUtc, Instant? toUtc, CancellationToken ct)
     {
         var report = await BuildCreditorsReport(tenantId, fromUtc, toUtc, ct);
         return exportKind == ExportKind.Pdf
@@ -516,10 +531,10 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             : (renderer.RenderSpreadsheet(CreditorsCsvRows(report), "Creditors"), $"creditors-report-{stamp}.xlsx", ReportDocumentRenderer.XlsxMimeType);
     }
 
-    private static (DateTime FromUtc, DateTime ToUtc) NormalizeDateRange(DateTime? fromUtc, DateTime? toUtc)
+    private static (Instant FromUtc, Instant ToUtc) NormalizeDateRange(Instant? fromUtc, Instant? toUtc)
     {
-        var to = toUtc ?? DateTime.UtcNow;
-        var from = fromUtc ?? to.AddDays(-30);
+        var to = toUtc ?? SystemClock.Instance.GetCurrentInstant();
+        var from = fromUtc ?? to - Duration.FromDays(30);
         return (from, to);
     }
 
@@ -549,7 +564,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
     public static IEnumerable<string[]> InventoryCsvRows(InventoryReportResponse report)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
+        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("g", null)];
         yield return ["TotalProducts", report.TotalProducts.ToString()];
         yield return ["TotalUnits", report.TotalUnits.ToString()];
         yield return ["LowStockItems", report.LowStockItems.ToString()];
@@ -568,7 +583,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
                 row.SellingPrice.ToString("0.00"),
                 row.CostValue.ToString("0.00"),
                 row.SellingValue.ToString("0.00"),
-                row.ExpiryDate?.ToString("yyyy-MM-dd") ?? ""
+                row.ExpiryDate?.ToString("uuuu-MM-dd", null) ?? ""
             ];
         }
     }
@@ -589,9 +604,9 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
     public static IEnumerable<string[]> SalesCsvRows(SalesReportResponse report)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc.ToString("u")];
-        yield return ["ToUtc", report.ToUtc.ToString("u")];
+        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("g", null)];
+        yield return ["FromUtc", report.FromUtc.ToString("g", null)];
+        yield return ["ToUtc", report.ToUtc.ToString("g", null)];
         yield return ["SalesCount", report.SalesCount.ToString()];
         yield return ["Revenue", report.Revenue.ToString("0.00")];
         yield return ["VatAmount", report.VatAmount.ToString("0.00")];
@@ -601,7 +616,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         yield return ["DailyDate", "SalesCount", "Revenue", "Outstanding"];
         foreach (var day in report.Daily)
         {
-            yield return [day.Date.ToString("yyyy-MM-dd"), day.SalesCount.ToString(), day.Revenue.ToString("0.00"), day.Outstanding.ToString("0.00")];
+            yield return [day.Date.ToString("uuuu-MM-dd", null), day.SalesCount.ToString(), day.Revenue.ToString("0.00"), day.Outstanding.ToString("0.00")];
         }
         yield return [];
         yield return ["PaymentMethod", "Amount"];
@@ -613,7 +628,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
     public static IEnumerable<string> SalesPdfLines(SalesReportResponse report)
     {
-        yield return $"Range: {report.FromUtc:yyyy-MM-dd} to {report.ToUtc:yyyy-MM-dd}";
+        yield return $"Range: {report.FromUtc.InUtc().Date.ToString("uuuu-MM-dd", null)} to {report.ToUtc.InUtc().Date.ToString("uuuu-MM-dd", null)}";
         yield return $"Sales Count: {report.SalesCount}";
         yield return $"Revenue: NGN {report.Revenue:0.00}";
         yield return $"VAT: NGN {report.VatAmount:0.00}";
@@ -622,15 +637,15 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         yield return string.Empty;
         foreach (var day in report.Daily.Take(40))
         {
-            yield return $"{day.Date:yyyy-MM-dd} | Sales:{day.SalesCount} | Revenue:{day.Revenue:0.00} | Outstanding:{day.Outstanding:0.00}";
+            yield return $"{day.Date.ToString("uuuu-MM-dd", null)} | Sales:{day.SalesCount} | Revenue:{day.Revenue:0.00} | Outstanding:{day.Outstanding:0.00}";
         }
     }
 
     public static IEnumerable<string[]> ProfitLossCsvRows(ProfitLossReportResponse report)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc.ToString("u")];
-        yield return ["ToUtc", report.ToUtc.ToString("u")];
+        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("g", null)];
+        yield return ["FromUtc", report.FromUtc.ToString("g", null)];
+        yield return ["ToUtc", report.ToUtc.ToString("g", null)];
         yield return ["Revenue", report.Revenue.ToString("0.00")];
         yield return ["COGS", report.Cogs.ToString("0.00")];
         yield return ["GrossProfit", report.GrossProfit.ToString("0.00")];
@@ -646,7 +661,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
     public static IEnumerable<string> ProfitLossPdfLines(ProfitLossReportResponse report)
     {
-        yield return $"Range: {report.FromUtc:yyyy-MM-dd} to {report.ToUtc:yyyy-MM-dd}";
+        yield return $"Range: {report.FromUtc.InUtc().Date.ToString("uuuu-MM-dd", null)} to {report.ToUtc.InUtc().Date.ToString("uuuu-MM-dd", null)}";
         yield return $"Revenue: NGN {report.Revenue:0.00}";
         yield return $"COGS: NGN {report.Cogs:0.00}";
         yield return $"Gross Profit: NGN {report.GrossProfit:0.00}";
@@ -664,9 +679,9 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
 
     public static IEnumerable<string[]> CreditorsCsvRows(CreditorsReportResponse report)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc?.ToString("u") ?? ""];
-        yield return ["ToUtc", report.ToUtc?.ToString("u") ?? ""];
+        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("g", null)];
+        yield return ["FromUtc", report.FromUtc?.ToString("g", null) ?? ""];
+        yield return ["ToUtc", report.ToUtc?.ToString("g", null) ?? ""];
         yield return ["OpenCredits", report.OpenCredits.ToString()];
         yield return ["TotalOutstanding", report.TotalOutstanding.ToString("0.00")];
         yield return [];
@@ -679,7 +694,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
                 row.SaleNumber,
                 row.CustomerName,
                 row.ItemsSummary,
-                row.DueDateUtc.ToString("u"),
+                row.DueDateUtc.ToString("g", null),
                 row.DaysOverdue.ToString(),
                 row.OutstandingAmount.ToString("0.00"),
                 row.Status
@@ -694,7 +709,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         yield return string.Empty;
         foreach (var row in report.Credits.Take(50))
         {
-            yield return $"{row.CustomerName} | {row.SaleNumber} | Due:{row.DueDateUtc:yyyy-MM-dd} | Out:{row.OutstandingAmount:0.00}";
+            yield return $"{row.CustomerName} | {row.SaleNumber} | Due:{row.DueDateUtc.InUtc().Date.ToString("uuuu-MM-dd", null)} | Out:{row.OutstandingAmount:0.00}";
         }
     }
 
@@ -725,5 +740,5 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
         Spreadsheet
     }
 
-    private sealed record ReportFilterEnvelope(DateTime? FromUtc, DateTime? ToUtc);
+    private sealed record ReportFilterEnvelope(Instant? FromUtc, Instant? ToUtc);
 }

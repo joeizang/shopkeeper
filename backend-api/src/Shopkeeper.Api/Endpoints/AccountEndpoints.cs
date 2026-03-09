@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using NodaTime;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Infrastructure;
+using Shopkeeper.Api.Services;
 
 namespace Shopkeeper.Api.Endpoints;
 
@@ -23,7 +25,7 @@ public static class AccountEndpoints
     }
 
     private static async Task<IResult> GetMe(
-        ShopkeeperDbContext db,
+        AccountReadService reads,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -34,26 +36,16 @@ public static class AccountEndpoints
             return Results.Unauthorized();
         }
 
-        var user = await db.Users.FirstOrDefaultAsync(x => x.Id == userId.Value, ct);
-        if (user is null)
-        {
-            return Results.NotFound();
-        }
-
-        return Results.Ok(new AccountProfileResponse(
-            user.Id,
-            user.FullName,
-            user.Email,
-            user.PhoneNumber,
-            user.AvatarUrl,
-            user.PreferredLanguage,
-            user.Timezone,
-            user.CreatedAtUtc));
+        var cached = await reads.GetProfileAsync(userId.Value, ct);
+        return cached.Value is null
+            ? Results.NotFound()
+            : HttpCacheResults.OkOrNotModified(httpContext, cached!);
     }
 
     private static async Task<IResult> UpdateMe(
         [FromBody] UpdateAccountProfileRequest request,
         ShopkeeperDbContext db,
+        ApiCacheService cache,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -101,6 +93,7 @@ public static class AccountEndpoints
         });
 
         await db.SaveChangesAsync(ct);
+        await cache.InvalidateTagsAsync([ApiCacheTags.UserAccount(userId.Value)], ct);
 
         return Results.Ok(new AccountProfileResponse(
             user.Id,
@@ -126,6 +119,7 @@ public static class AccountEndpoints
         }
 
         var sessions = await db.RefreshTokens
+            .AsNoTracking()
             .Where(x => x.UserAccountId == userId.Value)
             .OrderByDescending(x => x.CreatedAtUtc)
             .Select(x => new SessionView(
@@ -167,7 +161,7 @@ public static class AccountEndpoints
 
         if (!session.RevokedAtUtc.HasValue)
         {
-            session.RevokedAtUtc = DateTime.UtcNow;
+            session.RevokedAtUtc = SystemClock.Instance.GetCurrentInstant();
             db.AuditLogs.Add(new Domain.AuditLog
             {
                 TenantId = session.ShopMembership.ShopId,
@@ -205,7 +199,7 @@ public static class AccountEndpoints
             return Results.Ok(new { revokedCount = 0, status = "no-active-sessions" });
         }
 
-        var revokedAtUtc = DateTime.UtcNow;
+        var revokedAtUtc = SystemClock.Instance.GetCurrentInstant();
         var tenantId = tenant.GetTenantId(httpContext.User) ?? Guid.Empty;
 
         foreach (var session in sessions)
@@ -239,6 +233,7 @@ public static class AccountEndpoints
         }
 
         var identities = await db.AuthIdentities
+            .AsNoTracking()
             .Where(x => x.UserAccountId == userId.Value)
             .OrderBy(x => x.Provider)
             .Select(x => new LinkedIdentityView(
