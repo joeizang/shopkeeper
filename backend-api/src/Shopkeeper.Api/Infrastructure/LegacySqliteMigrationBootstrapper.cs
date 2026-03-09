@@ -6,26 +6,34 @@ namespace Shopkeeper.Api.Infrastructure;
 
 internal static class LegacySqliteMigrationBootstrapper
 {
-    private const string InitialCreateMigrationId = "20260304161941_InitialCreate";
-    private const string AuthRefactorMigrationId = "20260305150934_AuthAndAccountRefactor";
     private const string EfProductVersion = "10.0.0";
 
-    private static readonly HashSet<string> InitialSchemaTables = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly HashSet<string> CurrentSchemaTables = new(StringComparer.OrdinalIgnoreCase)
     {
         "AuditLogs",
-        "InventoryItems",
-        "Sales",
-        "Shops",
-        "Users"
-    };
-
-    private static readonly HashSet<string> AuthSchemaTables = new(StringComparer.OrdinalIgnoreCase)
-    {
         "AuthIdentities",
+        "CreditAccounts",
+        "CreditRepayments",
+        "DeviceCheckpoints",
         "EmailOutboxMessages",
+        "Expenses",
+        "IdempotencyRecords",
+        "InventoryItems",
+        "ItemPhotos",
         "MagicLinkChallenges",
+        "RefreshTokens",
+        "ReportFiles",
+        "ReportJobs",
+        "SaleLines",
+        "SalePayments",
+        "Sales",
+        "ShopMemberships",
+        "Shops",
+        "StockAdjustments",
+        "SyncChanges",
         "UserClaims",
         "UserLogins",
+        "Users",
         "UserTokens"
     };
 
@@ -61,20 +69,19 @@ internal static class LegacySqliteMigrationBootstrapper
                 return;
             }
 
-            var hasInitialSchema = InitialSchemaTables.All(tableNames.Contains);
-            var hasAuthSchema = AuthSchemaTables.All(tableNames.Contains);
-            if (!hasInitialSchema)
+            if (!CurrentSchemaTables.All(tableNames.Contains))
+            {
+                return;
+            }
+
+            var latestMigrationId = db.Database.GetMigrations().LastOrDefault();
+            if (string.IsNullOrWhiteSpace(latestMigrationId))
             {
                 return;
             }
 
             await EnsureHistoryTableAsync(connection, ct);
-            await InsertHistoryRowAsync(connection, InitialCreateMigrationId, ct);
-
-            if (hasAuthSchema)
-            {
-                await InsertHistoryRowAsync(connection, AuthRefactorMigrationId, ct);
-            }
+            await InsertHistoryRowAsync(connection, latestMigrationId, ct);
         }
         finally
         {

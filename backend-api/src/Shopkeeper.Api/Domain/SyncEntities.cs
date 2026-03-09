@@ -36,3 +36,15 @@ public sealed class AuditLog
     public string PayloadJson { get; set; } = "{}";
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
 }
+
+public sealed class IdempotencyRecord
+{
+    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid TenantId { get; set; }
+    public string Scope { get; set; } = string.Empty;
+    public string IdempotencyKey { get; set; } = string.Empty;
+    public long BucketKey { get; set; }
+    public int ResponseStatusCode { get; set; }
+    public string ResponseJson { get; set; } = string.Empty;
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+}

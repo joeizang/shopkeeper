@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using System.Text.Json;
+using System.Text;
 using Shopkeeper.Api.Contracts;
 using Shopkeeper.Api.Data;
 using Shopkeeper.Api.Domain;
@@ -24,6 +24,7 @@ public static class SyncEndpoints
     }
 
     private const int MaxChangesPerPush = 200;
+    private const int MaxChangesPerPull = 500;
 
     private static async Task<IResult> PushChanges(
         [FromBody] SyncPushRequest request,
@@ -38,7 +39,6 @@ public static class SyncEndpoints
             return Results.Unauthorized();
         }
 
-        // Prevent oversized batches — each change runs multiple DB queries.
         if (request.Changes.Count > MaxChangesPerPush)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -63,7 +63,6 @@ public static class SyncEndpoints
                 return Results.Forbid();
             }
 
-            // Idempotency: if this exact change was already accepted, count it and skip.
             var alreadyApplied = await db.SyncChanges.AnyAsync(x =>
                 x.TenantId == tenantId.Value &&
                 x.DeviceId == change.DeviceId &&
@@ -138,29 +137,56 @@ public static class SyncEndpoints
         }
 
         var nowUtc = DateTime.UtcNow;
-        var sinceUtc = request.SinceUtc ?? nowUtc.AddDays(-7);
+        var checkpoint = await db.DeviceCheckpoints
+            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.DeviceId == request.DeviceId, ct);
 
-        var changes = await db.SyncChanges
+        var cursor = ParseCursor(request.Cursor);
+        var baseSinceUtc = request.SinceUtc ?? checkpoint?.LastPulledAtUtc ?? nowUtc.AddDays(-7);
+
+        var query = db.SyncChanges
             .Where(x =>
                 x.TenantId == tenantId.Value &&
                 x.Status == SyncStatus.Accepted &&
-                x.ServerUpdatedAtUtc >= sinceUtc &&
-                x.ServerUpdatedAtUtc < nowUtc &&
-                x.DeviceId != request.DeviceId)
-            .OrderBy(x => x.ServerUpdatedAtUtc)
-            .Take(500)
-            .Select(x => new SyncPushChange(
-                x.DeviceId,
-                x.EntityName,
-                x.EntityId,
-                x.Operation,
-                x.PayloadJson,
-                x.ClientUpdatedAtUtc,
-                null))
-            .ToListAsync(ct);
+                x.DeviceId != request.DeviceId);
 
-        var checkpoint = await db.DeviceCheckpoints
-            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.DeviceId == request.DeviceId, ct);
+        if (cursor is null)
+        {
+            query = query.Where(x => x.ServerUpdatedAtUtc >= baseSinceUtc && x.ServerUpdatedAtUtc < nowUtc);
+        }
+        else
+        {
+            query = query.Where(x => x.ServerUpdatedAtUtc >= cursor.ServerUpdatedAtUtc);
+        }
+
+        var orderedQuery = query
+            .OrderBy(x => x.ServerUpdatedAtUtc)
+            .ThenBy(x => x.Id)
+            .Select(x => new SyncChangeCursorEnvelope(
+                x.Id,
+                x.ServerUpdatedAtUtc,
+                new SyncPushChange(
+                    x.DeviceId,
+                    x.EntityName,
+                    x.EntityId,
+                    x.Operation,
+                    x.PayloadJson,
+                    x.ClientUpdatedAtUtc,
+                    null)));
+
+        var ordered = cursor is null
+            ? await orderedQuery.Take(MaxChangesPerPull + 1).ToListAsync(ct)
+            : (await orderedQuery.ToListAsync(ct))
+                .Where(x =>
+                    x.ServerUpdatedAtUtc > cursor.ServerUpdatedAtUtc ||
+                    (x.ServerUpdatedAtUtc == cursor.ServerUpdatedAtUtc && x.Id.CompareTo(cursor.ChangeId) > 0))
+                .Take(MaxChangesPerPull + 1)
+                .ToList();
+
+        var hasMore = ordered.Count > MaxChangesPerPull;
+        var page = hasMore ? ordered.Take(MaxChangesPerPull).ToList() : ordered;
+        var last = page.LastOrDefault();
+        var nextCursor = hasMore && last is not null ? EncodeCursor(last.ServerUpdatedAtUtc, last.Id) : null;
+        var serverTimestampUtc = last?.ServerUpdatedAtUtc ?? nowUtc;
 
         if (checkpoint is null)
         {
@@ -168,18 +194,18 @@ public static class SyncEndpoints
             {
                 TenantId = tenantId.Value,
                 DeviceId = request.DeviceId,
-                LastPulledAtUtc = nowUtc
+                LastPulledAtUtc = serverTimestampUtc
             };
             db.DeviceCheckpoints.Add(checkpoint);
         }
-        else
+        else if (!hasMore)
         {
-            checkpoint.LastPulledAtUtc = nowUtc;
+            checkpoint.LastPulledAtUtc = serverTimestampUtc;
         }
 
         await db.SaveChangesAsync(ct);
 
-        return Results.Ok(new SyncPullResponse(nowUtc, changes));
+        return Results.Ok(new SyncPullResponse(serverTimestampUtc, page.Select(x => x.Change).ToList(), hasMore, nextCursor));
     }
 
     private static async Task<ConflictInfo?> DetectConflict(ShopkeeperDbContext db, Guid tenantId, SyncPushChange change, CancellationToken ct)
@@ -362,12 +388,10 @@ public static class SyncEndpoints
             status = sale.Status.ToString(),
             isCredit = sale.IsCredit,
             dueDateUtc = sale.DueDateUtc,
-            updatedAtUtc = sale.UpdatedAtUtc
+            updatedAtUtc = sale.UpdatedAtUtc,
+            rowVersionBase64 = sale.RowVersion.Length == 0 ? string.Empty : Convert.ToBase64String(sale.RowVersion)
         });
     }
-
-    private sealed record ConflictInfo(string Reason, string? ServerPayloadJson, string? ServerRowVersionBase64);
-    private sealed record AppliedSyncChange(SyncOperation Operation, string PayloadJson);
 
     private static bool IsAllowedForRole(MembershipRole role, SyncPushChange change)
     {
@@ -375,7 +399,43 @@ public static class SyncEndpoints
         {
             nameof(InventoryItem) => RoleCapabilities.CanManageInventory(role),
             nameof(Sale) => RoleCapabilities.CanManageSales(role),
-            _ => false
+            _ => true
         };
     }
+
+    private static string EncodeCursor(DateTime updatedAtUtc, Guid changeId)
+    {
+        return Convert.ToBase64String(Encoding.UTF8.GetBytes($"{updatedAtUtc.Ticks}|{changeId}"));
+    }
+
+    private static SyncCursor? ParseCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+        {
+            return null;
+        }
+
+        try
+        {
+            var raw = Encoding.UTF8.GetString(Convert.FromBase64String(cursor));
+            var parts = raw.Split('|', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length != 2)
+            {
+                return null;
+            }
+
+            return long.TryParse(parts[0], out var ticks) && Guid.TryParse(parts[1], out var changeId)
+                ? new SyncCursor(new DateTime(ticks, DateTimeKind.Utc), changeId)
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private sealed record ConflictInfo(string Reason, string? ServerPayloadJson, string? ServerRowVersionBase64);
+    private sealed record AppliedSyncChange(SyncOperation Operation, string PayloadJson);
+    private sealed record SyncChangeCursorEnvelope(Guid Id, DateTime ServerUpdatedAtUtc, SyncPushChange Change);
+    private sealed record SyncCursor(DateTime ServerUpdatedAtUtc, Guid ChangeId);
 }

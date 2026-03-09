@@ -13,9 +13,10 @@ public sealed record CreateSaleRequest(
     bool IsCredit,
     DateTime? DueDateUtc,
     List<SaleLineRequest> Lines,
-    List<SalePaymentRequest>? InitialPayments);
+    List<SalePaymentRequest>? InitialPayments,
+    string? ClientRequestId = null);
 
-public sealed record AddSalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference, string? Note);
+public sealed record AddSalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference, string? Note, string? ClientRequestId = null);
 
 public sealed record SaleLineView(Guid Id, Guid InventoryItemId, string ProductNameSnapshot, int Quantity, decimal UnitPrice, decimal LineTotal);
 public sealed record SalePaymentView(Guid Id, string Method, decimal Amount, string? Reference, DateTime CreatedAtUtc);

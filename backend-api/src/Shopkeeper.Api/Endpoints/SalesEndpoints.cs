@@ -33,13 +33,15 @@ public static class SalesEndpoints
         [FromBody] CreateSaleRequest request,
         ShopkeeperDbContext db,
         SaleCalculator calculator,
+        IdempotencyService idempotency,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
     {
-        if (request.Lines.Count == 0)
+        var validation = ValidateCreateSale(request);
+        if (validation.Count > 0)
         {
-            return Results.ValidationProblem(new Dictionary<string, string[]> { ["lines"] = ["At least one line is required."] });
+            return Results.ValidationProblem(validation);
         }
 
         var tenantId = tenant.GetTenantId(httpContext.User);
@@ -56,7 +58,7 @@ public static class SalesEndpoints
         }
 
         var items = await db.InventoryItems
-            .Where(x => x.TenantId == tenantId.Value && request.Lines.Select(l => l.InventoryItemId).Contains(x.Id))
+            .Where(x => x.TenantId == tenantId.Value && request.Lines.Select(l => l.InventoryItemId).Contains(x.Id) && !x.IsDeleted)
             .ToDictionaryAsync(x => x.Id, ct);
 
         foreach (var line in request.Lines)
@@ -73,102 +75,125 @@ public static class SalesEndpoints
         }
 
         var totals = calculator.Calculate(request.Lines, request.DiscountAmount, shop.VatEnabled, shop.VatRate);
-        var paidAmount = request.InitialPayments?.Sum(p => p.Amount) ?? 0m;
-        var outstanding = Math.Max(0, totals.TotalAmount - paidAmount);
-
-        // Build the sale object before the transaction so all validation is done first.
-        var sale = new Sale
+        if (request.DiscountAmount > totals.Subtotal)
         {
-            TenantId = tenantId.Value,
-            SaleNumber = string.Empty, // assigned atomically inside the transaction below
-            CustomerName = request.CustomerName,
-            CustomerPhone = request.CustomerPhone,
-            DiscountAmount = totals.DiscountAmount,
-            Subtotal = totals.Subtotal,
-            VatAmount = totals.VatAmount,
-            TotalAmount = totals.TotalAmount,
-            OutstandingAmount = outstanding,
-            IsCredit = request.IsCredit || outstanding > 0,
-            DueDateUtc = request.DueDateUtc,
-            Status = outstanding > 0 ? SaleStatus.PartiallyPaid : SaleStatus.Completed,
-            CreatedByMembershipId = membershipId.Value
-        };
-
-        foreach (var line in request.Lines)
-        {
-            var item = items[line.InventoryItemId];
-            item.Quantity -= line.Quantity;
-
-            sale.Lines.Add(new SaleLine
-            {
-                TenantId = tenantId.Value,
-                InventoryItemId = line.InventoryItemId,
-                ProductNameSnapshot = item.ProductName,
-                Quantity = line.Quantity,
-                UnitPrice = line.UnitPrice,
-                LineTotal = line.UnitPrice * line.Quantity
-            });
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["discountAmount"] = ["Discount amount cannot exceed the sale subtotal."] });
         }
 
-        if (request.InitialPayments is not null)
+        var paidAmount = request.InitialPayments?.Sum(p => p.Amount) ?? 0m;
+        if (paidAmount > totals.TotalAmount)
         {
-            foreach (var payment in request.InitialPayments)
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["initialPayments"] = ["Initial payments cannot exceed the sale total."] });
+        }
+
+        var idem = await idempotency.BeginAsync(tenantId.Value, "sales.create", httpContext, request, request.ClientRequestId, ct);
+        if (idem.Status != IdempotencyBeginStatus.Started)
+        {
+            return idem.ExistingResult!;
+        }
+
+        try
+        {
+            var outstanding = totals.TotalAmount - paidAmount;
+            var sale = new Sale
             {
-                sale.Payments.Add(new SalePayment
+                TenantId = tenantId.Value,
+                SaleNumber = string.Empty,
+                CustomerName = request.CustomerName?.Trim(),
+                CustomerPhone = string.IsNullOrWhiteSpace(request.CustomerPhone) ? null : request.CustomerPhone.Trim(),
+                DiscountAmount = totals.DiscountAmount,
+                Subtotal = totals.Subtotal,
+                VatAmount = totals.VatAmount,
+                TotalAmount = totals.TotalAmount,
+                OutstandingAmount = outstanding,
+                IsCredit = request.IsCredit || outstanding > 0,
+                DueDateUtc = request.DueDateUtc,
+                Status = outstanding > 0 ? SaleStatus.PartiallyPaid : SaleStatus.Completed,
+                CreatedByMembershipId = membershipId.Value
+            };
+
+            foreach (var line in request.Lines)
+            {
+                var item = items[line.InventoryItemId];
+                item.Quantity -= line.Quantity;
+
+                sale.Lines.Add(new SaleLine
                 {
                     TenantId = tenantId.Value,
-                    Method = payment.Method,
-                    Amount = payment.Amount,
-                    Reference = payment.Reference
+                    InventoryItemId = line.InventoryItemId,
+                    ProductNameSnapshot = item.ProductName,
+                    Quantity = line.Quantity,
+                    UnitPrice = line.UnitPrice,
+                    CostPriceSnapshot = item.CostPrice,
+                    LineTotal = line.UnitPrice * line.Quantity
                 });
             }
-        }
 
-        // Wrap the count + insert in an explicit transaction so SQLite serialises concurrent
-        // writers and prevents two requests from receiving the same SaleNumber.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
+            if (request.InitialPayments is not null)
+            {
+                foreach (var payment in request.InitialPayments)
+                {
+                    sale.Payments.Add(new SalePayment
+                    {
+                        TenantId = tenantId.Value,
+                        Method = payment.Method,
+                        Amount = payment.Amount,
+                        Reference = payment.Reference
+                    });
+                }
+            }
 
-        var saleCount = await db.Sales.CountAsync(x => x.TenantId == tenantId.Value, ct);
-        sale.SaleNumber = $"SL-{DateTime.UtcNow:yyyyMMdd}-{saleCount + 1:0000}";
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-        db.Sales.Add(sale);
+            var saleCount = await db.Sales.CountAsync(x => x.TenantId == tenantId.Value, ct);
+            sale.SaleNumber = $"SL-{DateTime.UtcNow:yyyyMMdd}-{saleCount + 1:0000}";
 
-        if (sale.IsCredit && outstanding > 0)
-        {
-            db.CreditAccounts.Add(new CreditAccount
+            db.Sales.Add(sale);
+
+            if (sale.IsCredit && outstanding > 0)
+            {
+                db.CreditAccounts.Add(new CreditAccount
+                {
+                    TenantId = tenantId.Value,
+                    Sale = sale,
+                    DueDateUtc = request.DueDateUtc ?? DateTime.UtcNow.AddDays(30),
+                    OutstandingAmount = outstanding,
+                    Status = CreditStatus.Open
+                });
+            }
+
+            db.AuditLogs.Add(new AuditLog
             {
                 TenantId = tenantId.Value,
-                Sale = sale,
-                DueDateUtc = request.DueDateUtc ?? DateTime.UtcNow.AddDays(30),
-                OutstandingAmount = outstanding,
-                Status = CreditStatus.Open
+                UserAccountId = tenant.GetUserId(httpContext.User),
+                Action = "sales.create",
+                EntityName = nameof(Sale),
+                EntityId = sale.Id,
+                PayloadJson = JsonSerializer.Serialize(new { sale.SaleNumber, sale.TotalAmount })
             });
+            db.SyncChanges.Add(new SyncChange
+            {
+                TenantId = tenantId.Value,
+                DeviceId = ServerDeviceId,
+                EntityName = nameof(Sale),
+                EntityId = sale.Id,
+                Operation = SyncOperation.Create,
+                PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
+                ClientUpdatedAtUtc = DateTime.UtcNow
+            });
+
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+
+            var response = new { sale.Id, sale.SaleNumber, sale.TotalAmount, sale.OutstandingAmount };
+            await idempotency.CompleteAsync(idem.Record!, StatusCodes.Status201Created, response, ct);
+            return Results.Created($"/api/v1/sales/{sale.Id}", response);
         }
-
-        db.AuditLogs.Add(new AuditLog
+        catch
         {
-            TenantId = tenantId.Value,
-            UserAccountId = tenant.GetUserId(httpContext.User),
-            Action = "sales.create",
-            EntityName = nameof(Sale),
-            EntityId = sale.Id,
-            PayloadJson = $"{{\"saleNumber\":\"{sale.SaleNumber}\"}}"
-        });
-        db.SyncChanges.Add(new SyncChange
-        {
-            TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
-            EntityName = nameof(Sale),
-            EntityId = sale.Id,
-            Operation = SyncOperation.Create,
-            PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
-        });
-
-        await db.SaveChangesAsync(ct);
-        await tx.CommitAsync(ct);
-
-        return Results.Created($"/api/v1/sales/{sale.Id}", new { sale.Id, sale.SaleNumber, sale.TotalAmount, sale.OutstandingAmount });
+            await idempotency.AbandonAsync(idem.Record, ct);
+            throw;
+        }
     }
 
     private static async Task<IResult> GetSale(
@@ -219,10 +244,17 @@ public static class SalesEndpoints
         [FromBody] AddSalePaymentRequest request,
         ShopkeeperDbContext db,
         CreditLedgerService creditService,
+        IdempotencyService idempotency,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
     {
+        var validation = ValidatePaymentRequest(request.Method, request.Amount, request.Reference, "amount");
+        if (validation.Count > 0)
+        {
+            return Results.ValidationProblem(validation);
+        }
+
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue)
         {
@@ -239,68 +271,94 @@ public static class SalesEndpoints
             return Results.NotFound();
         }
 
-        var payment = new SalePayment
+        if (sale.IsVoided)
         {
-            TenantId = tenantId.Value,
-            SaleId = sale.Id,
-            Method = request.Method,
-            Amount = request.Amount,
-            Reference = request.Reference
-        };
-
-        db.SalePayments.Add(payment);
-
-        sale.OutstandingAmount = Math.Max(0, sale.OutstandingAmount - request.Amount);
-        sale.Status = sale.OutstandingAmount == 0 ? SaleStatus.Completed : SaleStatus.PartiallyPaid;
-
-        if (sale.CreditAccount is not null)
-        {
-            creditService.ApplyRepayment(sale.CreditAccount, request.Amount);
-            db.CreditRepayments.Add(new CreditRepayment
-            {
-                TenantId = tenantId.Value,
-                CreditAccountId = sale.CreditAccount.Id,
-                SalePayment = payment,
-                Amount = request.Amount,
-                Notes = request.Note
-            });
+            return Results.Conflict(new { message = "Voided sales cannot receive new payments." });
         }
 
-        db.AuditLogs.Add(new AuditLog
+        if (request.Amount > sale.OutstandingAmount)
         {
-            TenantId = tenantId.Value,
-            UserAccountId = tenant.GetUserId(httpContext.User),
-            Action = "sales.payment.add",
-            EntityName = nameof(SalePayment),
-            EntityId = payment.Id,
-            PayloadJson = JsonSerializer.Serialize(new
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["amount"] = ["Payment amount cannot exceed the outstanding balance."] });
+        }
+
+        var idem = await idempotency.BeginAsync(tenantId.Value, $"sales.payment:{id}", httpContext, request, request.ClientRequestId, ct);
+        if (idem.Status != IdempotencyBeginStatus.Started)
+        {
+            return idem.ExistingResult!;
+        }
+
+        try
+        {
+            var payment = new SalePayment
             {
-                payment.SaleId,
-                payment.Method,
-                payment.Amount,
-                payment.Reference
-            })
-        });
-        db.SyncChanges.Add(new SyncChange
-        {
-            TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
-            EntityName = nameof(Sale),
-            EntityId = sale.Id,
-            Operation = SyncOperation.Update,
-            PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
-            ClientUpdatedAtUtc = DateTime.UtcNow
-        });
+                TenantId = tenantId.Value,
+                SaleId = sale.Id,
+                Method = request.Method,
+                Amount = request.Amount,
+                Reference = request.Reference?.Trim()
+            };
 
-        await db.SaveChangesAsync(ct);
+            db.SalePayments.Add(payment);
 
-        return Results.Ok(new
+            sale.OutstandingAmount -= request.Amount;
+            sale.Status = sale.OutstandingAmount == 0 ? SaleStatus.Completed : SaleStatus.PartiallyPaid;
+
+            if (sale.CreditAccount is not null)
+            {
+                creditService.ApplyRepayment(sale.CreditAccount, request.Amount);
+                db.CreditRepayments.Add(new CreditRepayment
+                {
+                    TenantId = tenantId.Value,
+                    CreditAccountId = sale.CreditAccount.Id,
+                    SalePayment = payment,
+                    Amount = request.Amount,
+                    Notes = request.Note
+                });
+            }
+
+            db.AuditLogs.Add(new AuditLog
+            {
+                TenantId = tenantId.Value,
+                UserAccountId = tenant.GetUserId(httpContext.User),
+                Action = "sales.payment.add",
+                EntityName = nameof(SalePayment),
+                EntityId = payment.Id,
+                PayloadJson = JsonSerializer.Serialize(new
+                {
+                    payment.SaleId,
+                    payment.Method,
+                    payment.Amount,
+                    payment.Reference
+                })
+            });
+            db.SyncChanges.Add(new SyncChange
+            {
+                TenantId = tenantId.Value,
+                DeviceId = ServerDeviceId,
+                EntityName = nameof(Sale),
+                EntityId = sale.Id,
+                Operation = SyncOperation.Update,
+                PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
+                ClientUpdatedAtUtc = DateTime.UtcNow
+            });
+
+            await db.SaveChangesAsync(ct);
+
+            var response = new
+            {
+                saleId = sale.Id,
+                paymentId = payment.Id,
+                sale.OutstandingAmount,
+                status = sale.Status.ToString()
+            };
+            await idempotency.CompleteAsync(idem.Record!, StatusCodes.Status200OK, response, ct);
+            return Results.Ok(response);
+        }
+        catch
         {
-            saleId = sale.Id,
-            paymentId = payment.Id,
-            sale.OutstandingAmount,
-            status = sale.Status.ToString()
-        });
+            await idempotency.AbandonAsync(idem.Record, ct);
+            throw;
+        }
     }
 
     private static async Task<IResult> VoidSale(
@@ -413,6 +471,63 @@ public static class SalesEndpoints
             sale.Payments.Select(x => new SalePaymentRequest(x.Method, x.Amount, x.Reference)).ToList());
 
         return Results.Ok(response);
+    }
+
+    private static Dictionary<string, string[]> ValidateCreateSale(CreateSaleRequest request)
+    {
+        var errors = new Dictionary<string, string[]>();
+
+        if (request.Lines.Count == 0)
+        {
+            errors["lines"] = ["At least one line is required."];
+        }
+        else if (request.Lines.Any(x => x.Quantity <= 0))
+        {
+            errors["quantity"] = ["Every sale line quantity must be greater than zero."];
+        }
+        else if (request.Lines.Any(x => x.UnitPrice <= 0))
+        {
+            errors["unitPrice"] = ["Every sale line unit price must be greater than zero."];
+        }
+
+        if (request.DiscountAmount < 0)
+        {
+            errors["discountAmount"] = ["Discount amount cannot be negative."];
+        }
+
+        if (request.DueDateUtc.HasValue && request.DueDateUtc.Value < DateTime.UtcNow.Date)
+        {
+            errors["dueDateUtc"] = ["Due date cannot be in the past."];
+        }
+
+        if (request.InitialPayments is not null)
+        {
+            foreach (var payment in request.InitialPayments)
+            {
+                foreach (var pair in ValidatePaymentRequest(payment.Method, payment.Amount, payment.Reference, "initialPayments"))
+                {
+                    errors[pair.Key] = pair.Value;
+                }
+            }
+        }
+
+        return errors;
+    }
+
+    private static Dictionary<string, string[]> ValidatePaymentRequest(PaymentMethod method, decimal amount, string? reference, string fieldName)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (amount <= 0)
+        {
+            errors[fieldName] = ["Payment amount must be greater than zero."];
+        }
+
+        if (method is PaymentMethod.BankTransfer or PaymentMethod.Pos && string.IsNullOrWhiteSpace(reference))
+        {
+            errors["reference"] = ["Reference is required for transfer and POS payments."];
+        }
+
+        return errors;
     }
 
     private static object BuildSaleSyncPayload(Sale sale)

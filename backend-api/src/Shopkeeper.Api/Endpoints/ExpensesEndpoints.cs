@@ -78,6 +78,16 @@ public static class ExpensesEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
+        if (string.IsNullOrWhiteSpace(request.RowVersionBase64))
+        {
+            return Results.Problem(statusCode: StatusCodes.Status428PreconditionRequired, title: "Precondition required", detail: "rowVersionBase64 is required for expense updates.");
+        }
+
+        if (request.Amount.HasValue && request.Amount.Value <= 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["amount"] = ["Amount must be greater than zero."] });
+        }
+
         var result = await reporting.UpdateExpense(tenantId.Value, id, request, ct);
         return result.Status switch
         {

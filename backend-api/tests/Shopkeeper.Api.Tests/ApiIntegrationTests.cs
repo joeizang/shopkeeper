@@ -3,6 +3,10 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Shopkeeper.Api.Data;
+using Shopkeeper.Api.Domain;
 using Microsoft.Extensions.Configuration;
 
 namespace Shopkeeper.Api.Tests;
@@ -637,6 +641,154 @@ public sealed class ApiIntegrationTests
         Assert.Equal(HttpStatusCode.NotFound, deletedItemResponse.StatusCode);
     }
 
+    [Fact]
+    public async Task CreateSale_WithSameClientRequestId_IsIdempotent()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-idem@shopkeeper.local", "Idempotent Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "IDEMP-1001");
+        var requestId = Guid.NewGuid().ToString("N");
+        var payload = new
+        {
+            customerName = "Retry Buyer",
+            customerPhone = "08033333333",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            clientRequestId = requestId,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 2150m, reference = (string?)null }
+            }
+        };
+
+        var first = await client.PostAsJsonAsync("/api/v1/sales/", payload);
+        first.EnsureSuccessStatusCode();
+        var firstSale = (await first.Content.ReadFromJsonAsync<CreateSaleEnvelope>())!;
+
+        var second = await client.PostAsJsonAsync("/api/v1/sales/", payload);
+        second.EnsureSuccessStatusCode();
+        var secondSale = (await second.Content.ReadFromJsonAsync<CreateSaleEnvelope>())!;
+
+        Assert.Equal(firstSale.Id, secondSale.Id);
+        Assert.Equal(firstSale.SaleNumber, secondSale.SaleNumber);
+    }
+
+    [Fact]
+    public async Task AddPayment_RejectsOverpayment()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-overpay@shopkeeper.local", "Overpay Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "OVERPAY-1001");
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Overpay Buyer",
+            customerPhone = "08034444444",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            clientRequestId = Guid.NewGuid().ToString("N"),
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 1000m, reference = (string?)null }
+            }
+        });
+        saleResponse.EnsureSuccessStatusCode();
+        var sale = (await saleResponse.Content.ReadFromJsonAsync<CreateSaleEnvelope>())!;
+
+        var overpayment = await client.PostAsJsonAsync($"/api/v1/sales/{sale.Id}/payments", new
+        {
+            method = 1,
+            amount = sale.OutstandingAmount + 1,
+            reference = (string?)null,
+            note = "too much",
+            clientRequestId = Guid.NewGuid().ToString("N")
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, overpayment.StatusCode);
+    }
+
+    [Fact]
+    public async Task SyncPull_WithCursor_DrainsBacklogWithoutSkippingChanges()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-sync-cursor@shopkeeper.local", "Sync Cursor Shop");
+        SetBearer(client, owner.AccessToken);
+
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<ShopkeeperDbContext>();
+            var baseTime = DateTime.UtcNow.AddMinutes(-10);
+            for (var i = 0; i < 501; i++)
+            {
+                db.SyncChanges.Add(new SyncChange
+                {
+                    TenantId = owner.ShopId,
+                    DeviceId = "server-seed",
+                    EntityName = nameof(InventoryItem),
+                    EntityId = Guid.NewGuid(),
+                    Operation = SyncOperation.Update,
+                    PayloadJson = "{}",
+                    ClientUpdatedAtUtc = baseTime.AddSeconds(i),
+                    ServerUpdatedAtUtc = baseTime.AddSeconds(i),
+                    Status = SyncStatus.Accepted
+                });
+            }
+
+            await db.SaveChangesAsync();
+        }
+
+        var firstPull = await client.PostAsJsonAsync("/api/v1/sync/pull", new
+        {
+            deviceId = "tablet-1",
+            sinceUtc = DateTime.UtcNow.AddHours(-1),
+            cursor = (string?)null
+        });
+        firstPull.EnsureSuccessStatusCode();
+        var firstPage = (await firstPull.Content.ReadFromJsonAsync<SyncPullEnvelope>())!;
+        Assert.True(firstPage.HasMore);
+        Assert.Equal(500, firstPage.Changes.Count);
+        Assert.False(string.IsNullOrWhiteSpace(firstPage.NextCursor));
+
+        var secondPull = await client.PostAsJsonAsync("/api/v1/sync/pull", new
+        {
+            deviceId = "tablet-1",
+            sinceUtc = firstPage.ServerTimestampUtc,
+            cursor = firstPage.NextCursor
+        });
+        secondPull.EnsureSuccessStatusCode();
+        var secondPage = (await secondPull.Content.ReadFromJsonAsync<SyncPullEnvelope>())!;
+        Assert.False(secondPage.HasMore);
+        Assert.Single(secondPage.Changes);
+    }
+
     private static async Task<AuthEnvelope> RegisterOwner(HttpClient client, string email, string shopName)
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
@@ -819,6 +971,8 @@ public sealed class ApiIntegrationTests
         DateTime ExpiresAtUtc,
         DateTime? LastSeenAtUtc,
         bool IsRevoked);
+    private sealed record SyncPullEnvelope(DateTime ServerTimestampUtc, List<SyncPushEnvelope> Changes, bool HasMore, string? NextCursor);
+    private sealed record SyncPushEnvelope(string DeviceId, string EntityName, Guid EntityId, int Operation, string PayloadJson, DateTime ClientUpdatedAtUtc, string? RowVersionBase64);
     private sealed record AccountProfileEnvelope(
         Guid UserId,
         string FullName,

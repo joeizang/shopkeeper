@@ -23,6 +23,6 @@ public sealed record SyncConflictView(
 
 public sealed record SyncPushResponse(int AcceptedCount, List<SyncConflictView> Conflicts);
 
-public sealed record SyncPullRequest(string DeviceId, DateTime? SinceUtc);
+public sealed record SyncPullRequest(string DeviceId, DateTime? SinceUtc, string? Cursor = null);
 
-public sealed record SyncPullResponse(DateTime ServerTimestampUtc, List<SyncPushChange> Changes);
+public sealed record SyncPullResponse(DateTime ServerTimestampUtc, List<SyncPushChange> Changes, bool HasMore, string? NextCursor);

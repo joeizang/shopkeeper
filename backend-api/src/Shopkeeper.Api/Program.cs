@@ -1,9 +1,10 @@
+using System.Diagnostics;
 using System.Text;
 using System.Threading.RateLimiting;
 using DotNetEnv;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpLogging;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -23,14 +24,11 @@ try
 }
 catch (Exception ex) when (ex is FileNotFoundException || ex.GetType().Name.Contains("EnvFile"))
 {
-    // .env.local is optional in non-local environments.
 }
 
 var builder = WebApplication.CreateBuilder(args);
-builder.Configuration.Sources.Clear();
 builder.Configuration.AddEnvironmentVariables();
 
-// Enforce a 2 MB request body limit. SyncPush payloads are the largest expected body.
 builder.WebHost.ConfigureKestrel(kestrel =>
     kestrel.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
 
@@ -40,13 +38,39 @@ var httpsRedirectionEnabled = builder.Configuration.GetValue<bool?>("App:HttpsRe
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddHttpLogging(options =>
+{
+    options.LoggingFields = HttpLoggingFields.RequestMethod |
+                            HttpLoggingFields.RequestPath |
+                            HttpLoggingFields.ResponseStatusCode |
+                            HttpLoggingFields.Duration;
+    options.RequestHeaders.Add("X-Correlation-Id");
+    options.RequestHeaders.Add("X-Device-Id");
+    options.ResponseHeaders.Add("X-Correlation-Id");
+});
 
-builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
-builder.Services.Configure<GoogleAuthOptions>(builder.Configuration.GetSection(GoogleAuthOptions.SectionName));
-builder.Services.Configure<MagicLinkOptions>(builder.Configuration.GetSection(MagicLinkOptions.SectionName));
+builder.Services.AddOptions<JwtOptions>()
+    .Bind(builder.Configuration.GetSection(JwtOptions.SectionName))
+    .Validate(o => !string.IsNullOrWhiteSpace(o.Issuer), "Jwt:Issuer is required.")
+    .Validate(o => !string.IsNullOrWhiteSpace(o.Audience), "Jwt:Audience is required.")
+    .Validate(o => !string.IsNullOrWhiteSpace(o.SigningKey) && o.SigningKey.Length >= 32, "Jwt:SigningKey must be configured with at least 32 characters.")
+    .Validate(o => o.AccessTokenMinutes is >= 5 and <= 1440, "Jwt:AccessTokenMinutes must be between 5 and 1440.")
+    .Validate(o => o.RefreshTokenDays is >= 1 and <= 365, "Jwt:RefreshTokenDays must be between 1 and 365.")
+    .ValidateOnStart();
 
-var connectionString = builder.Configuration.GetConnectionString("Default")
+builder.Services.AddOptions<MagicLinkOptions>()
+    .Bind(builder.Configuration.GetSection(MagicLinkOptions.SectionName))
+    .Validate(o => o.ExpiryMinutes is >= 5 and <= 60, "MagicLink:ExpiryMinutes must be between 5 and 60.")
+    .Validate(o => o.MaxRequestsPerMinutePerEmail is >= 1 and <= 20, "MagicLink:MaxRequestsPerMinutePerEmail must be between 1 and 20.")
+    .Validate(o => Uri.TryCreate(o.AppLinkBaseUrl, UriKind.Absolute, out _), "MagicLink:AppLinkBaseUrl must be an absolute URL.")
+    .ValidateOnStart();
+
+builder.Services.AddOptions<GoogleAuthOptions>()
+    .Bind(builder.Configuration.GetSection(GoogleAuthOptions.SectionName));
+
+var rawConnectionString = builder.Configuration.GetConnectionString("Default")
     ?? "Data Source=shopkeeper.db";
+var connectionString = SqliteConnectionStringResolver.Resolve(rawConnectionString, builder.Environment.ContentRootPath);
 
 builder.Services.AddDbContext<ShopkeeperDbContext>(options =>
     options.UseSqlite(connectionString));
@@ -60,6 +84,9 @@ builder.Services
         options.Password.RequireUppercase = false;
         options.Password.RequireNonAlphanumeric = false;
         options.Password.RequiredLength = 8;
+        options.Lockout.AllowedForNewUsers = true;
+        options.Lockout.MaxFailedAccessAttempts = 5;
+        options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
     })
     .AddEntityFrameworkStores<ShopkeeperDbContext>();
 
@@ -68,13 +95,13 @@ builder.Services.AddScoped<SaleCalculator>();
 builder.Services.AddScoped<CreditLedgerService>();
 builder.Services.AddScoped<ReportingService>();
 builder.Services.AddScoped<MagicLinkService>();
+builder.Services.AddScoped<IdempotencyService>();
 builder.Services.AddScoped<IGoogleTokenValidator, GoogleTokenValidator>();
 builder.Services.AddSingleton<ReportDocumentRenderer>();
 builder.Services.AddSingleton<ReportJobChannel>();
 builder.Services.AddHostedService<ReportJobWorker>();
 builder.Services.AddScoped<TenantContextAccessor>();
 
-// Health checks — liveness (self) and readiness (DB connectivity)
 builder.Services.AddHealthChecks()
     .AddCheck("self", () => HealthCheckResult.Healthy("API is running."), tags: ["live"])
     .AddCheck<DatabaseHealthCheck>("database", tags: ["ready"]);
@@ -138,12 +165,10 @@ builder.Services.AddAuthorization(options =>
         }));
 });
 
-// Rate limiting: tight sliding window on auth routes, global token-bucket fallback.
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    // Auth routes: 10 requests per minute per remote IP.
     options.AddSlidingWindowLimiter("auth", o =>
     {
         o.PermitLimit = 10;
@@ -152,7 +177,6 @@ builder.Services.AddRateLimiter(options =>
         o.QueueLimit = 0;
     });
 
-    // Sync push/pull: 60 per minute per remote IP (mobile retries are expected).
     options.AddSlidingWindowLimiter("sync", o =>
     {
         o.PermitLimit = 60;
@@ -161,7 +185,6 @@ builder.Services.AddRateLimiter(options =>
         o.QueueLimit = 0;
     });
 
-    // Global fallback: 200 tokens replenished every 10 s per IP.
     options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
         RateLimitPartition.GetTokenBucketLimiter(
             ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
@@ -174,7 +197,6 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 
-// CORS: permissive in Development, origin-restricted in Production via Cors:AllowedOrigins env var.
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
@@ -190,7 +212,6 @@ builder.Services.AddCors(options =>
         }
         else
         {
-            // Deny all cross-origin requests when no origins are explicitly configured in production.
             policy.WithOrigins("https://placeholder.invalid");
         }
     });
@@ -198,7 +219,6 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Security headers + correlation ID on every response.
 app.Use(async (ctx, next) =>
 {
     ctx.Response.Headers.XContentTypeOptions = "nosniff";
@@ -210,7 +230,31 @@ app.Use(async (ctx, next) =>
     ctx.Response.Headers["X-Correlation-Id"] = correlationId;
     ctx.Items["CorrelationId"] = correlationId;
 
-    await next();
+    var logger = ctx.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("Shopkeeper.Api.Request");
+    using var scope = logger.BeginScope(new Dictionary<string, object?>
+    {
+        ["CorrelationId"] = correlationId,
+        ["TraceId"] = Activity.Current?.TraceId.ToString(),
+        ["TenantId"] = ctx.User.FindFirst(CustomClaimTypes.TenantId)?.Value,
+        ["MembershipId"] = ctx.User.FindFirst(CustomClaimTypes.MembershipId)?.Value,
+        ["UserId"] = ctx.User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+    });
+
+    var sw = Stopwatch.StartNew();
+    try
+    {
+        await next();
+        logger.LogInformation("HTTP {Method} {Path} responded {StatusCode} in {ElapsedMs} ms",
+            ctx.Request.Method,
+            ctx.Request.Path,
+            ctx.Response.StatusCode,
+            sw.ElapsedMilliseconds);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "HTTP {Method} {Path} failed after {ElapsedMs} ms", ctx.Request.Method, ctx.Request.Path, sw.ElapsedMilliseconds);
+        throw;
+    }
 });
 
 if (app.Environment.IsEnvironment("Testing"))
@@ -222,7 +266,6 @@ else
     app.UseExceptionHandler();
 }
 
-// Swagger available in Development and Staging; disabled in Production and Testing.
 if (!app.Environment.IsProduction() && !app.Environment.IsEnvironment("Testing"))
 {
     app.UseSwagger();
@@ -235,18 +278,17 @@ if (!app.Environment.IsEnvironment("Testing") && httpsRedirectionEnabled)
 }
 
 app.UseCors();
+app.UseHttpLogging();
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Health endpoints: /healthz/live (always OK if process is up),
-// /healthz/ready (OK only when DB is reachable).
-app.MapHealthChecks("/healthz/live", new HealthCheckOptions
+app.MapHealthChecks("/healthz/live", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("live"),
     ResultStatusCodes = { [HealthStatus.Healthy] = 200, [HealthStatus.Degraded] = 200, [HealthStatus.Unhealthy] = 503 }
 });
-app.MapHealthChecks("/healthz/ready", new HealthCheckOptions
+app.MapHealthChecks("/healthz/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
 {
     Predicate = check => check.Tags.Contains("ready"),
     ResultStatusCodes = { [HealthStatus.Healthy] = 200, [HealthStatus.Degraded] = 200, [HealthStatus.Unhealthy] = 503 }
@@ -289,9 +331,6 @@ app.Run();
 
 public partial class Program;
 
-/// <summary>
-/// Checks that the database is reachable. Used by the /healthz/ready probe.
-/// </summary>
 internal sealed class DatabaseHealthCheck(IServiceScopeFactory scopeFactory) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)

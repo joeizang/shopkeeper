@@ -116,7 +116,7 @@ public sealed class ReportingService(ShopkeeperDbContext db, ReportDocumentRende
             where s.TenantId == tenantId && !s.IsVoided
                   && s.CreatedAtUtc >= fromUtc && s.CreatedAtUtc <= toUtc
                   && item.TenantId == tenantId
-            select (decimal?)(sl.Quantity * item.CostPrice)
+            select (decimal?)(sl.Quantity * sl.CostPriceSnapshot)
         ).SumAsync(ct) ?? 0m;
         var expensesByCategory = await db.Expenses
             .Where(x => x.TenantId == tenantId && x.ExpenseDateUtc >= fromUtc && x.ExpenseDateUtc <= toUtc)

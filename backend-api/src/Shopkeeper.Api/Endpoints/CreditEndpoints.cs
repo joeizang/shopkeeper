@@ -97,10 +97,17 @@ public static class CreditEndpoints
         [FromBody] CreditRepaymentRequest request,
         ShopkeeperDbContext db,
         CreditLedgerService service,
+        IdempotencyService idempotency,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
     {
+        var validation = ValidateRepaymentRequest(request);
+        if (validation.Count > 0)
+        {
+            return Results.ValidationProblem(validation);
+        }
+
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue)
         {
@@ -116,76 +123,113 @@ public static class CreditEndpoints
             return Results.NotFound(new { message = "Credit account not found for sale." });
         }
 
-        var payment = new SalePayment
+        if (request.Amount > sale.CreditAccount.OutstandingAmount)
         {
-            TenantId = tenantId.Value,
-            SaleId = sale.Id,
-            Method = request.Method,
-            Amount = request.Amount,
-            Reference = request.Reference
-        };
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["amount"] = ["Repayment amount cannot exceed the outstanding balance."] });
+        }
 
-        db.SalePayments.Add(payment);
-
-        service.ApplyRepayment(sale.CreditAccount, request.Amount);
-        sale.OutstandingAmount = sale.CreditAccount.OutstandingAmount;
-        sale.Status = sale.OutstandingAmount == 0 ? SaleStatus.Completed : SaleStatus.PartiallyPaid;
-
-        db.CreditRepayments.Add(new CreditRepayment
+        var idem = await idempotency.BeginAsync(tenantId.Value, $"credits.repayment:{saleId}", httpContext, request, request.ClientRequestId, ct);
+        if (idem.Status != IdempotencyBeginStatus.Started)
         {
-            TenantId = tenantId.Value,
-            CreditAccountId = sale.CreditAccount.Id,
-            SalePayment = payment,
-            Amount = request.Amount,
-            Notes = request.Notes
-        });
-        db.AuditLogs.Add(new AuditLog
+            return idem.ExistingResult!;
+        }
+
+        try
         {
-            TenantId = tenantId.Value,
-            UserAccountId = tenant.GetUserId(httpContext.User),
-            Action = "credits.repayment.add",
-            EntityName = nameof(CreditRepayment),
-            EntityId = payment.Id,
-            PayloadJson = JsonSerializer.Serialize(new
+            var payment = new SalePayment
             {
-                sale.Id,
-                request.Amount,
-                request.Method,
-                request.Reference
-            })
-        });
-        db.SyncChanges.Add(new SyncChange
-        {
-            TenantId = tenantId.Value,
-            DeviceId = ServerDeviceId,
-            EntityName = nameof(Sale),
-            EntityId = sale.Id,
-            Operation = SyncOperation.Update,
-            PayloadJson = SyncJson.Serialize(new
+                TenantId = tenantId.Value,
+                SaleId = sale.Id,
+                Method = request.Method,
+                Amount = request.Amount,
+                Reference = request.Reference?.Trim()
+            };
+
+            db.SalePayments.Add(payment);
+
+            service.ApplyRepayment(sale.CreditAccount, request.Amount);
+            sale.OutstandingAmount = sale.CreditAccount.OutstandingAmount;
+            sale.Status = sale.OutstandingAmount == 0 ? SaleStatus.Completed : SaleStatus.PartiallyPaid;
+
+            db.CreditRepayments.Add(new CreditRepayment
             {
-                id = sale.Id,
-                saleNumber = sale.SaleNumber,
-                subtotal = sale.Subtotal,
-                vatAmount = sale.VatAmount,
-                discountAmount = sale.DiscountAmount,
-                totalAmount = sale.TotalAmount,
-                outstandingAmount = sale.OutstandingAmount,
-                status = sale.Status.ToString(),
-                isCredit = sale.IsCredit,
-                dueDateUtc = sale.DueDateUtc,
-                updatedAtUtc = sale.UpdatedAtUtc
-            }),
-            ClientUpdatedAtUtc = DateTime.UtcNow
-        });
+                TenantId = tenantId.Value,
+                CreditAccountId = sale.CreditAccount.Id,
+                SalePayment = payment,
+                Amount = request.Amount,
+                Notes = request.Notes
+            });
+            db.AuditLogs.Add(new AuditLog
+            {
+                TenantId = tenantId.Value,
+                UserAccountId = tenant.GetUserId(httpContext.User),
+                Action = "credits.repayment.add",
+                EntityName = nameof(CreditRepayment),
+                EntityId = payment.Id,
+                PayloadJson = JsonSerializer.Serialize(new
+                {
+                    sale.Id,
+                    request.Amount,
+                    request.Method,
+                    request.Reference
+                })
+            });
+            db.SyncChanges.Add(new SyncChange
+            {
+                TenantId = tenantId.Value,
+                DeviceId = ServerDeviceId,
+                EntityName = nameof(Sale),
+                EntityId = sale.Id,
+                Operation = SyncOperation.Update,
+                PayloadJson = SyncJson.Serialize(new
+                {
+                    id = sale.Id,
+                    saleNumber = sale.SaleNumber,
+                    subtotal = sale.Subtotal,
+                    vatAmount = sale.VatAmount,
+                    discountAmount = sale.DiscountAmount,
+                    totalAmount = sale.TotalAmount,
+                    outstandingAmount = sale.OutstandingAmount,
+                    status = sale.Status.ToString(),
+                    isCredit = sale.IsCredit,
+                    dueDateUtc = sale.DueDateUtc,
+                    updatedAtUtc = sale.UpdatedAtUtc
+                }),
+                ClientUpdatedAtUtc = DateTime.UtcNow
+            });
 
-        await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync(ct);
 
-        return Results.Ok(new
+            var response = new
+            {
+                saleId = sale.Id,
+                creditId = sale.CreditAccount.Id,
+                outstanding = sale.OutstandingAmount,
+                status = sale.CreditAccount.Status.ToString()
+            };
+            await idempotency.CompleteAsync(idem.Record!, StatusCodes.Status200OK, response, ct);
+            return Results.Ok(response);
+        }
+        catch
         {
-            saleId = sale.Id,
-            creditId = sale.CreditAccount.Id,
-            outstanding = sale.OutstandingAmount,
-            status = sale.CreditAccount.Status.ToString()
-        });
+            await idempotency.AbandonAsync(idem.Record, ct);
+            throw;
+        }
+    }
+
+    private static Dictionary<string, string[]> ValidateRepaymentRequest(CreditRepaymentRequest request)
+    {
+        var errors = new Dictionary<string, string[]>();
+        if (request.Amount <= 0)
+        {
+            errors["amount"] = ["Repayment amount must be greater than zero."];
+        }
+
+        if (request.Method is PaymentMethod.BankTransfer or PaymentMethod.Pos && string.IsNullOrWhiteSpace(request.Reference))
+        {
+            errors["reference"] = ["Reference is required for transfer and POS repayments."];
+        }
+
+        return errors;
     }
 }

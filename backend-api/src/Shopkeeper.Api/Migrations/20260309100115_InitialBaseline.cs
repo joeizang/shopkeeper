@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Shopkeeper.Api.Migrations
 {
     /// <inheritdoc />
-    public partial class InitialCreate : Migration
+    public partial class InitialBaseline : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -46,6 +46,64 @@ namespace Shopkeeper.Api.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "EmailOutboxMessages",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ToEmail = table.Column<string>(type: "TEXT", nullable: false),
+                    Subject = table.Column<string>(type: "TEXT", nullable: false),
+                    Body = table.Column<string>(type: "TEXT", nullable: false),
+                    Status = table.Column<string>(type: "TEXT", nullable: false),
+                    AttemptCount = table.Column<int>(type: "INTEGER", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    SentAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    LastError = table.Column<string>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_EmailOutboxMessages", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "Expenses",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    TenantId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Title = table.Column<string>(type: "TEXT", nullable: false),
+                    Category = table.Column<string>(type: "TEXT", nullable: false),
+                    Amount = table.Column<decimal>(type: "TEXT", nullable: false),
+                    ExpenseDateUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    Notes = table.Column<string>(type: "TEXT", nullable: true),
+                    CreatedByUserAccountId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    RowVersion = table.Column<byte[]>(type: "BLOB", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_Expenses", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "IdempotencyRecords",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    TenantId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Scope = table.Column<string>(type: "TEXT", nullable: false),
+                    IdempotencyKey = table.Column<string>(type: "TEXT", nullable: false),
+                    BucketKey = table.Column<long>(type: "INTEGER", nullable: false),
+                    ResponseStatusCode = table.Column<int>(type: "INTEGER", nullable: false),
+                    ResponseJson = table.Column<string>(type: "TEXT", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_IdempotencyRecords", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "InventoryItems",
                 columns: table => new
                 {
@@ -69,6 +127,28 @@ namespace Shopkeeper.Api.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_InventoryItems", x => x.Id);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "ReportFiles",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    TenantId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ReportType = table.Column<string>(type: "TEXT", nullable: false),
+                    Format = table.Column<string>(type: "TEXT", nullable: false),
+                    FileName = table.Column<string>(type: "TEXT", nullable: false),
+                    ContentType = table.Column<string>(type: "TEXT", nullable: false),
+                    ByteLength = table.Column<long>(type: "INTEGER", nullable: false),
+                    Content = table.Column<byte[]>(type: "BLOB", nullable: false),
+                    CreatedByUserAccountId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    RowVersion = table.Column<byte[]>(type: "BLOB", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ReportFiles", x => x.Id);
                 });
 
             migrationBuilder.CreateTable(
@@ -108,6 +188,7 @@ namespace Shopkeeper.Api.Migrations
                     Code = table.Column<string>(type: "TEXT", nullable: false),
                     VatEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
                     VatRate = table.Column<decimal>(type: "TEXT", nullable: false),
+                    DefaultDiscountPercent = table.Column<decimal>(type: "TEXT", nullable: false),
                     CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
                     UpdatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
                     RowVersion = table.Column<byte[]>(type: "BLOB", nullable: false),
@@ -145,10 +226,24 @@ namespace Shopkeeper.Api.Migrations
                 {
                     Id = table.Column<Guid>(type: "TEXT", nullable: false),
                     FullName = table.Column<string>(type: "TEXT", nullable: false),
-                    Email = table.Column<string>(type: "TEXT", nullable: true),
-                    Phone = table.Column<string>(type: "TEXT", nullable: true),
-                    PasswordHash = table.Column<string>(type: "TEXT", nullable: false),
-                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false)
+                    AvatarUrl = table.Column<string>(type: "TEXT", nullable: true),
+                    PreferredLanguage = table.Column<string>(type: "TEXT", nullable: true),
+                    Timezone = table.Column<string>(type: "TEXT", nullable: true),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    UserName = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
+                    NormalizedUserName = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
+                    Email = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
+                    NormalizedEmail = table.Column<string>(type: "TEXT", maxLength: 256, nullable: true),
+                    EmailConfirmed = table.Column<bool>(type: "INTEGER", nullable: false),
+                    PasswordHash = table.Column<string>(type: "TEXT", nullable: true),
+                    SecurityStamp = table.Column<string>(type: "TEXT", nullable: true),
+                    ConcurrencyStamp = table.Column<string>(type: "TEXT", nullable: true),
+                    PhoneNumber = table.Column<string>(type: "TEXT", nullable: true),
+                    PhoneNumberConfirmed = table.Column<bool>(type: "INTEGER", nullable: false),
+                    TwoFactorEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
+                    LockoutEnd = table.Column<DateTimeOffset>(type: "TEXT", nullable: true),
+                    LockoutEnabled = table.Column<bool>(type: "INTEGER", nullable: false),
+                    AccessFailedCount = table.Column<int>(type: "INTEGER", nullable: false)
                 },
                 constraints: table =>
                 {
@@ -204,6 +299,35 @@ namespace Shopkeeper.Api.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "ReportJobs",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    TenantId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ReportType = table.Column<string>(type: "TEXT", nullable: false),
+                    Format = table.Column<string>(type: "TEXT", nullable: false),
+                    Status = table.Column<string>(type: "TEXT", nullable: false),
+                    FilterJson = table.Column<string>(type: "TEXT", nullable: true),
+                    FailureReason = table.Column<string>(type: "TEXT", nullable: true),
+                    RequestedByUserAccountId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ReportFileId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    RequestedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    CompletedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    UpdatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    RowVersion = table.Column<byte[]>(type: "BLOB", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_ReportJobs", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_ReportJobs_ReportFiles_ReportFileId",
+                        column: x => x.ReportFileId,
+                        principalTable: "ReportFiles",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.SetNull);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "CreditAccounts",
                 columns: table => new
                 {
@@ -239,6 +363,7 @@ namespace Shopkeeper.Api.Migrations
                     ProductNameSnapshot = table.Column<string>(type: "TEXT", nullable: false),
                     Quantity = table.Column<int>(type: "INTEGER", nullable: false),
                     UnitPrice = table.Column<decimal>(type: "TEXT", nullable: false),
+                    CostPriceSnapshot = table.Column<decimal>(type: "TEXT", nullable: false),
                     LineTotal = table.Column<decimal>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>
@@ -276,6 +401,55 @@ namespace Shopkeeper.Api.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "AuthIdentities",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    UserAccountId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    Provider = table.Column<string>(type: "TEXT", nullable: false),
+                    ProviderSubject = table.Column<string>(type: "TEXT", nullable: false),
+                    Email = table.Column<string>(type: "TEXT", nullable: true),
+                    EmailVerified = table.Column<bool>(type: "INTEGER", nullable: false),
+                    CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    LastUsedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_AuthIdentities", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_AuthIdentities_Users_UserAccountId",
+                        column: x => x.UserAccountId,
+                        principalTable: "Users",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "MagicLinkChallenges",
+                columns: table => new
+                {
+                    Id = table.Column<Guid>(type: "TEXT", nullable: false),
+                    UserAccountId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    Email = table.Column<string>(type: "TEXT", nullable: false),
+                    RequestedShopId = table.Column<Guid>(type: "TEXT", nullable: true),
+                    TokenHash = table.Column<string>(type: "TEXT", nullable: false),
+                    ExpiresAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    ConsumedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    RequestedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
+                    RequestIp = table.Column<string>(type: "TEXT", nullable: true),
+                    UserAgent = table.Column<string>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_MagicLinkChallenges", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_MagicLinkChallenges_Users_UserAccountId",
+                        column: x => x.UserAccountId,
+                        principalTable: "Users",
+                        principalColumn: "Id");
+                });
+
+            migrationBuilder.CreateTable(
                 name: "ShopMemberships",
                 columns: table => new
                 {
@@ -301,6 +475,67 @@ namespace Shopkeeper.Api.Migrations
                     table.ForeignKey(
                         name: "FK_ShopMemberships_Users_UserAccountId",
                         column: x => x.UserAccountId,
+                        principalTable: "Users",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "UserClaims",
+                columns: table => new
+                {
+                    Id = table.Column<int>(type: "INTEGER", nullable: false)
+                        .Annotation("Sqlite:Autoincrement", true),
+                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    ClaimType = table.Column<string>(type: "TEXT", nullable: true),
+                    ClaimValue = table.Column<string>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_UserClaims", x => x.Id);
+                    table.ForeignKey(
+                        name: "FK_UserClaims_Users_UserId",
+                        column: x => x.UserId,
+                        principalTable: "Users",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "UserLogins",
+                columns: table => new
+                {
+                    LoginProvider = table.Column<string>(type: "TEXT", nullable: false),
+                    ProviderKey = table.Column<string>(type: "TEXT", nullable: false),
+                    ProviderDisplayName = table.Column<string>(type: "TEXT", nullable: true),
+                    UserId = table.Column<Guid>(type: "TEXT", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_UserLogins", x => new { x.LoginProvider, x.ProviderKey });
+                    table.ForeignKey(
+                        name: "FK_UserLogins_Users_UserId",
+                        column: x => x.UserId,
+                        principalTable: "Users",
+                        principalColumn: "Id",
+                        onDelete: ReferentialAction.Cascade);
+                });
+
+            migrationBuilder.CreateTable(
+                name: "UserTokens",
+                columns: table => new
+                {
+                    UserId = table.Column<Guid>(type: "TEXT", nullable: false),
+                    LoginProvider = table.Column<string>(type: "TEXT", nullable: false),
+                    Name = table.Column<string>(type: "TEXT", nullable: false),
+                    Value = table.Column<string>(type: "TEXT", nullable: true)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_UserTokens", x => new { x.UserId, x.LoginProvider, x.Name });
+                    table.ForeignKey(
+                        name: "FK_UserTokens_Users_UserId",
+                        column: x => x.UserId,
                         principalTable: "Users",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
@@ -345,6 +580,9 @@ namespace Shopkeeper.Api.Migrations
                     TokenHash = table.Column<string>(type: "TEXT", nullable: false),
                     ExpiresAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false),
                     RevokedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
+                    DeviceId = table.Column<string>(type: "TEXT", nullable: true),
+                    DeviceName = table.Column<string>(type: "TEXT", nullable: true),
+                    LastSeenAtUtc = table.Column<DateTime>(type: "TEXT", nullable: true),
                     CreatedAtUtc = table.Column<DateTime>(type: "TEXT", nullable: false)
                 },
                 constraints: table =>
@@ -365,6 +603,17 @@ namespace Shopkeeper.Api.Migrations
                 });
 
             migrationBuilder.CreateIndex(
+                name: "IX_AuthIdentities_Provider_ProviderSubject",
+                table: "AuthIdentities",
+                columns: new[] { "Provider", "ProviderSubject" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_AuthIdentities_UserAccountId",
+                table: "AuthIdentities",
+                column: "UserAccountId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_CreditAccounts_SaleId",
                 table: "CreditAccounts",
                 column: "SaleId",
@@ -381,6 +630,17 @@ namespace Shopkeeper.Api.Migrations
                 column: "SalePaymentId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_Expenses_TenantId_ExpenseDateUtc",
+                table: "Expenses",
+                columns: new[] { "TenantId", "ExpenseDateUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_IdempotencyRecords_TenantId_Scope_IdempotencyKey_BucketKey",
+                table: "IdempotencyRecords",
+                columns: new[] { "TenantId", "Scope", "IdempotencyKey", "BucketKey" },
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_InventoryItems_TenantId_SerialNumber",
                 table: "InventoryItems",
                 columns: new[] { "TenantId", "SerialNumber" },
@@ -392,14 +652,46 @@ namespace Shopkeeper.Api.Migrations
                 column: "InventoryItemId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_MagicLinkChallenges_TokenHash",
+                table: "MagicLinkChallenges",
+                column: "TokenHash",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_MagicLinkChallenges_UserAccountId",
+                table: "MagicLinkChallenges",
+                column: "UserAccountId");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_RefreshTokens_ShopMembershipId",
                 table: "RefreshTokens",
                 column: "ShopMembershipId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_RefreshTokens_TokenHash",
+                table: "RefreshTokens",
+                column: "TokenHash",
+                unique: true);
+
+            migrationBuilder.CreateIndex(
                 name: "IX_RefreshTokens_UserAccountId",
                 table: "RefreshTokens",
                 column: "UserAccountId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ReportFiles_TenantId_CreatedAtUtc",
+                table: "ReportFiles",
+                columns: new[] { "TenantId", "CreatedAtUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ReportJobs_ReportFileId",
+                table: "ReportJobs",
+                column: "ReportFileId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_ReportJobs_TenantId_RequestedAtUtc",
+                table: "ReportJobs",
+                columns: new[] { "TenantId", "RequestedAtUtc" });
 
             migrationBuilder.CreateIndex(
                 name: "IX_SaleLines_SaleId",
@@ -439,14 +731,35 @@ namespace Shopkeeper.Api.Migrations
                 column: "InventoryItemId");
 
             migrationBuilder.CreateIndex(
+                name: "IX_UserClaims_UserId",
+                table: "UserClaims",
+                column: "UserId");
+
+            migrationBuilder.CreateIndex(
+                name: "IX_UserLogins_UserId",
+                table: "UserLogins",
+                column: "UserId");
+
+            migrationBuilder.CreateIndex(
+                name: "EmailIndex",
+                table: "Users",
+                column: "NormalizedEmail");
+
+            migrationBuilder.CreateIndex(
                 name: "IX_Users_Email",
                 table: "Users",
                 column: "Email");
 
             migrationBuilder.CreateIndex(
-                name: "IX_Users_Phone",
+                name: "IX_Users_PhoneNumber",
                 table: "Users",
-                column: "Phone");
+                column: "PhoneNumber");
+
+            migrationBuilder.CreateIndex(
+                name: "UserNameIndex",
+                table: "Users",
+                column: "NormalizedUserName",
+                unique: true);
         }
 
         /// <inheritdoc />
@@ -456,16 +769,34 @@ namespace Shopkeeper.Api.Migrations
                 name: "AuditLogs");
 
             migrationBuilder.DropTable(
+                name: "AuthIdentities");
+
+            migrationBuilder.DropTable(
                 name: "CreditRepayments");
 
             migrationBuilder.DropTable(
                 name: "DeviceCheckpoints");
 
             migrationBuilder.DropTable(
+                name: "EmailOutboxMessages");
+
+            migrationBuilder.DropTable(
+                name: "Expenses");
+
+            migrationBuilder.DropTable(
+                name: "IdempotencyRecords");
+
+            migrationBuilder.DropTable(
                 name: "ItemPhotos");
 
             migrationBuilder.DropTable(
+                name: "MagicLinkChallenges");
+
+            migrationBuilder.DropTable(
                 name: "RefreshTokens");
+
+            migrationBuilder.DropTable(
+                name: "ReportJobs");
 
             migrationBuilder.DropTable(
                 name: "SaleLines");
@@ -477,6 +808,15 @@ namespace Shopkeeper.Api.Migrations
                 name: "SyncChanges");
 
             migrationBuilder.DropTable(
+                name: "UserClaims");
+
+            migrationBuilder.DropTable(
+                name: "UserLogins");
+
+            migrationBuilder.DropTable(
+                name: "UserTokens");
+
+            migrationBuilder.DropTable(
                 name: "CreditAccounts");
 
             migrationBuilder.DropTable(
@@ -484,6 +824,9 @@ namespace Shopkeeper.Api.Migrations
 
             migrationBuilder.DropTable(
                 name: "ShopMemberships");
+
+            migrationBuilder.DropTable(
+                name: "ReportFiles");
 
             migrationBuilder.DropTable(
                 name: "InventoryItems");

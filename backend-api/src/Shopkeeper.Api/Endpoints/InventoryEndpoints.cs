@@ -183,8 +183,12 @@ public static class InventoryEndpoints
             return Results.NotFound();
         }
 
-        if (!string.IsNullOrWhiteSpace(request.RowVersionBase64) &&
-            item.RowVersion.Length > 0 &&
+        if (string.IsNullOrWhiteSpace(request.RowVersionBase64))
+        {
+            return Results.Problem(statusCode: StatusCodes.Status428PreconditionRequired, title: "Precondition required", detail: "rowVersionBase64 is required for inventory updates.");
+        }
+
+        if (item.RowVersion.Length > 0 &&
             Convert.ToBase64String(item.RowVersion) != request.RowVersionBase64)
         {
             return Results.Conflict(new { message = "Conflict detected. Item has changed on server.", entityId = id });
@@ -312,8 +316,12 @@ public static class InventoryEndpoints
             return Results.NotFound();
         }
 
-        if (!string.IsNullOrWhiteSpace(rowVersionBase64) &&
-            item.RowVersion.Length > 0 &&
+        if (string.IsNullOrWhiteSpace(rowVersionBase64))
+        {
+            return Results.Problem(statusCode: StatusCodes.Status428PreconditionRequired, title: "Precondition required", detail: "rowVersionBase64 is required for inventory deletes.");
+        }
+
+        if (item.RowVersion.Length > 0 &&
             Convert.ToBase64String(item.RowVersion) != rowVersionBase64)
         {
             return Results.Conflict(new { message = "Conflict detected. Item has changed on server.", entityId = id });

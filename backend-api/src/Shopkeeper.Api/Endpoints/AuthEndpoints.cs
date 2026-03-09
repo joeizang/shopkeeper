@@ -53,7 +53,7 @@ public static class AuthEndpoints
 
         if (emailExists || phoneExists)
         {
-            return Results.Conflict(new { message = "User already exists." });
+            return Results.Conflict(new { message = "An account with those credentials already exists." });
         }
 
         var user = new UserAccount
@@ -62,7 +62,7 @@ public static class AuthEndpoints
             Email = normalizedEmail,
             UserName = BuildUserName(normalizedEmail, normalizedPhone),
             PhoneNumber = normalizedPhone,
-            EmailConfirmed = !string.IsNullOrWhiteSpace(normalizedEmail)
+            EmailConfirmed = false
         };
 
         var create = await userManager.CreateAsync(user, request.Password);
@@ -94,7 +94,7 @@ public static class AuthEndpoints
         db.Shops.Add(shop);
         db.ShopMemberships.Add(membership);
 
-        UpsertAuthIdentity(db, user.Id, "password", normalizedEmail ?? normalizedPhone ?? user.Id.ToString("N"), normalizedEmail, !string.IsNullOrWhiteSpace(normalizedEmail));
+        await UpsertAuthIdentityAsync(db, user.Id, "password", normalizedEmail ?? normalizedPhone ?? user.Id.ToString("N"), normalizedEmail, false, ct);
 
         var device = ReadDevice(httpContext);
         var refreshTokenTuple = tokenService.GenerateRefreshToken();
@@ -132,18 +132,31 @@ public static class AuthEndpoints
         HttpContext httpContext,
         CancellationToken ct)
     {
+        const string genericFailure = "Invalid login request.";
         var user = await FindUserByLoginAsync(db, request.Login, ct);
+        if (user is not null && await userManager.IsLockedOutAsync(user))
+        {
+            return Results.Unauthorized();
+        }
 
         if (user is null || !await userManager.CheckPasswordAsync(user, request.Password))
         {
-            return Results.Unauthorized();
+            if (user is not null)
+            {
+                await userManager.AccessFailedAsync(user);
+            }
+
+            return Results.Json(new { message = genericFailure }, statusCode: StatusCodes.Status401Unauthorized);
         }
 
         var membership = await ResolveMembershipAsync(db, user.Id, request.ShopId, ct);
         if (membership is null)
         {
-            return Results.Forbid();
+            await userManager.AccessFailedAsync(user);
+            return Results.Json(new { message = genericFailure }, statusCode: StatusCodes.Status401Unauthorized);
         }
+
+        await userManager.ResetAccessFailedCountAsync(user);
 
         var device = ReadDevice(httpContext);
         var refreshTokenTuple = tokenService.GenerateRefreshToken();
@@ -260,12 +273,12 @@ public static class AuthEndpoints
             await db.SaveChangesAsync(ct);
         }
 
-        UpsertAuthIdentity(db, user.Id, "google", principal.Subject, normalizedEmail, principal.EmailVerified);
+        await UpsertAuthIdentityAsync(db, user.Id, "google", principal.Subject, normalizedEmail, principal.EmailVerified, ct);
 
         var membership = await ResolveMembershipAsync(db, user.Id, request.ShopId, ct);
         if (membership is null)
         {
-            return Results.Forbid();
+            return Results.Unauthorized();
         }
 
         var refreshTokenTuple = tokenService.GenerateRefreshToken();
@@ -296,7 +309,6 @@ public static class AuthEndpoints
     private static async Task<IResult> RequestMagicLink(
         [FromBody] MagicLinkRequest request,
         ShopkeeperDbContext db,
-        UserManager<UserAccount> userManager,
         MagicLinkService magicLinkService,
         IOptions<MagicLinkOptions> options,
         IWebHostEnvironment environment,
@@ -321,23 +333,14 @@ public static class AuthEndpoints
         }
 
         var user = await db.Users.FirstOrDefaultAsync(x => x.Email == email, ct);
-        if (user is null)
-        {
-            user = new UserAccount
-            {
-                FullName = GuessFullNameFromEmail(email),
-                Email = email,
-                UserName = BuildUserName(email, null),
-                EmailConfirmed = true
-            };
+        var targetShop = request.ShopId;
+        var membership = user is null ? null : await ResolveMembershipAsync(db, user.Id, targetShop, ct);
 
-            var create = await userManager.CreateAsync(user);
-            if (!create.Succeeded)
-            {
-                return Results.ValidationProblem(create.Errors
-                    .GroupBy(x => x.Code)
-                    .ToDictionary(g => g.Key, g => g.Select(x => x.Description).ToArray()));
-            }
+        if (user is null || membership is null)
+        {
+            return Results.Accepted(
+                "/api/v1/auth/magic-link/verify",
+                new MagicLinkRequestResponse(Guid.Empty, now.AddMinutes(options.Value.ExpiryMinutes), "If this email is registered, a sign-in link has been queued.", null));
         }
 
         var token = magicLinkService.CreateToken();
@@ -364,7 +367,7 @@ public static class AuthEndpoints
 
         db.AuditLogs.Add(new AuditLog
         {
-            TenantId = request.ShopId ?? Guid.Empty,
+            TenantId = membership.ShopId,
             UserAccountId = user.Id,
             Action = "auth.magic-link.request",
             EntityName = nameof(MagicLinkChallenge),
@@ -428,11 +431,12 @@ public static class AuthEndpoints
         var membership = await ResolveMembershipAsync(db, user.Id, targetShop, ct);
         if (membership is null)
         {
-            return Results.Forbid();
+            return Results.Unauthorized();
         }
 
         challenge.ConsumedAtUtc = now;
-        UpsertAuthIdentity(db, user.Id, "magic_link", challenge.Email, challenge.Email, true);
+        user.EmailConfirmed = true;
+        await UpsertAuthIdentityAsync(db, user.Id, "magic_link", challenge.Email, challenge.Email, true, ct);
 
         var refresh = tokenService.GenerateRefreshToken();
         db.RefreshTokens.Add(new RefreshToken
@@ -502,16 +506,17 @@ public static class AuthEndpoints
             : await membershipsQuery.FirstOrDefaultAsync(ct);
     }
 
-    private static void UpsertAuthIdentity(
+    private static async Task UpsertAuthIdentityAsync(
         ShopkeeperDbContext db,
         Guid userId,
         string provider,
         string providerSubject,
         string? email,
-        bool emailVerified)
+        bool emailVerified,
+        CancellationToken ct)
     {
-        var identity = db.AuthIdentities
-            .FirstOrDefault(x => x.Provider == provider && x.ProviderSubject == providerSubject);
+        var identity = await db.AuthIdentities
+            .FirstOrDefaultAsync(x => x.Provider == provider && x.ProviderSubject == providerSubject, ct);
 
         if (identity is null)
         {

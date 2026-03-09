@@ -164,13 +164,15 @@ public static class ShopEndpoints
             return Results.NotFound();
         }
 
-        if (!string.IsNullOrWhiteSpace(request.RowVersionBase64))
+        if (string.IsNullOrWhiteSpace(request.RowVersionBase64))
         {
-            var requestVersion = Convert.FromBase64String(request.RowVersionBase64);
-            if (!shop.RowVersion.SequenceEqual(requestVersion))
-            {
-                return Results.Conflict(new { message = "Shop settings changed. Refresh and try again." });
-            }
+            return Results.Problem(statusCode: StatusCodes.Status428PreconditionRequired, title: "Precondition required", detail: "rowVersionBase64 is required for shop settings updates.");
+        }
+
+        var requestVersion = Convert.FromBase64String(request.RowVersionBase64);
+        if (!shop.RowVersion.SequenceEqual(requestVersion))
+        {
+            return Results.Conflict(new { message = "Shop settings changed. Refresh and try again." });
         }
 
         shop.VatEnabled = request.VatEnabled;

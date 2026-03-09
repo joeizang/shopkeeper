@@ -21,4 +21,4 @@ public sealed record CreditDetailResponse(
     CreditAccountView Account,
     IReadOnlyList<CreditRepaymentView> Repayments);
 
-public sealed record CreditRepaymentRequest(decimal Amount, PaymentMethod Method, string? Reference, string? Notes);
+public sealed record CreditRepaymentRequest(decimal Amount, PaymentMethod Method, string? Reference, string? Notes, string? ClientRequestId = null);

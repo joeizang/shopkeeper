@@ -32,6 +32,7 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
     public DbSet<SyncChange> SyncChanges => Set<SyncChange>();
     public DbSet<DeviceCheckpoint> DeviceCheckpoints => Set<DeviceCheckpoint>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -150,6 +151,10 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
 
         modelBuilder.Entity<RefreshToken>()
             .HasIndex(x => x.TokenHash)
+            .IsUnique();
+
+        modelBuilder.Entity<IdempotencyRecord>()
+            .HasIndex(x => new { x.TenantId, x.Scope, x.IdempotencyKey, x.BucketKey })
             .IsUnique();
 
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())

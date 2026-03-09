@@ -341,6 +341,44 @@ namespace Shopkeeper.Api.Migrations
                     b.ToTable("Expenses");
                 });
 
+            modelBuilder.Entity("Shopkeeper.Api.Domain.IdempotencyRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("BucketKey")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ResponseJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ResponseStatusCode")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Scope")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Scope", "IdempotencyKey", "BucketKey")
+                        .IsUnique();
+
+                    b.ToTable("IdempotencyRecords");
+                });
+
             modelBuilder.Entity("Shopkeeper.Api.Domain.InventoryItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -590,10 +628,10 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<DateTime?>("CompletedAtUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("FilterJson")
+                    b.Property<string>("FailureReason")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("FailureReason")
+                    b.Property<string>("FilterJson")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Format")
@@ -607,10 +645,10 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("RequestedByUserAccountId")
+                    b.Property<DateTime>("RequestedAtUtc")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTime>("RequestedAtUtc")
+                    b.Property<Guid>("RequestedByUserAccountId")
                         .HasColumnType("TEXT");
 
                     b.Property<byte[]>("RowVersion")
@@ -709,6 +747,9 @@ namespace Shopkeeper.Api.Migrations
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("CostPriceSnapshot")
                         .HasColumnType("TEXT");
 
                     b.Property<Guid>("InventoryItemId")
