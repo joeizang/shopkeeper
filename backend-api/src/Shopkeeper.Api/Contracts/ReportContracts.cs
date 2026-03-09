@@ -49,7 +49,12 @@ public sealed record ProfitLossReportResponse(
     decimal Cogs,
     decimal GrossProfit,
     decimal Expenses,
-    decimal NetProfitLoss);
+    decimal NetProfitLoss,
+    IReadOnlyList<ExpenseCategorySummaryRow> ExpenseBreakdown);
+
+public sealed record ExpenseCategorySummaryRow(
+    string Category,
+    decimal Amount);
 
 public sealed record CreditorReportRow(
     Guid CreditAccountId,
@@ -69,3 +74,29 @@ public sealed record CreditorsReportResponse(
     int OpenCredits,
     decimal TotalOutstanding,
     IReadOnlyList<CreditorReportRow> Credits);
+
+public sealed record ReportJobView(
+    Guid Id,
+    string ReportType,
+    string Format,
+    string Status,
+    string? FilterJson,
+    Guid? ReportFileId,
+    DateTime RequestedAtUtc,
+    DateTime? CompletedAtUtc,
+    string? FailureReason);
+
+public sealed record ReportFileView(
+    Guid Id,
+    string ReportType,
+    string Format,
+    string FileName,
+    string ContentType,
+    long ByteLength,
+    DateTime CreatedAtUtc);
+
+public sealed record QueueReportJobRequest(
+    string ReportType,
+    string Format,
+    DateTime? FromUtc,
+    DateTime? ToUtc);

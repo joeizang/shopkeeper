@@ -294,6 +294,53 @@ namespace Shopkeeper.Api.Migrations
                     b.ToTable("EmailOutboxMessages");
                 });
 
+            modelBuilder.Entity("Shopkeeper.Api.Domain.Expense", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("CreatedByUserAccountId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("ExpenseDateUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "ExpenseDateUtc");
+
+                    b.ToTable("Expenses");
+                });
+
             modelBuilder.Entity("Shopkeeper.Api.Domain.InventoryItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -481,6 +528,115 @@ namespace Shopkeeper.Api.Migrations
                     b.ToTable("RefreshTokens");
                 });
 
+            modelBuilder.Entity("Shopkeeper.Api.Domain.ReportFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("ByteLength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<byte[]>("Content")
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<string>("ContentType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CreatedByUserAccountId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReportType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "CreatedAtUtc");
+
+                    b.ToTable("ReportFiles");
+                });
+
+            modelBuilder.Entity("Shopkeeper.Api.Domain.ReportJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FilterJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FailureReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ReportFileId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReportType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("RequestedByUserAccountId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RequestedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .HasColumnType("BLOB");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReportFileId");
+
+                    b.HasIndex("TenantId", "RequestedAtUtc");
+
+                    b.ToTable("ReportJobs");
+                });
+
             modelBuilder.Entity("Shopkeeper.Api.Domain.Sale", b =>
                 {
                     b.Property<Guid>("Id")
@@ -626,6 +782,9 @@ namespace Shopkeeper.Api.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("DefaultDiscountPercent")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Name")
@@ -972,6 +1131,16 @@ namespace Shopkeeper.Api.Migrations
                     b.Navigation("ShopMembership");
 
                     b.Navigation("UserAccount");
+                });
+
+            modelBuilder.Entity("Shopkeeper.Api.Domain.ReportJob", b =>
+                {
+                    b.HasOne("Shopkeeper.Api.Domain.ReportFile", "ReportFile")
+                        .WithMany()
+                        .HasForeignKey("ReportFileId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("ReportFile");
                 });
 
             modelBuilder.Entity("Shopkeeper.Api.Domain.SaleLine", b =>

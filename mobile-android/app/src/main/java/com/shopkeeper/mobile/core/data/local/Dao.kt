@@ -61,6 +61,9 @@ interface SyncDao {
     @Query("SELECT * FROM sync_conflicts WHERE id = :id LIMIT 1")
     suspend fun getConflictById(id: Long): SyncConflictEntity?
 
+    @Query("DELETE FROM sync_conflicts WHERE entityName = :entityName AND entityId = :entityId")
+    suspend fun deleteConflictsByEntity(entityName: String, entityId: String)
+
     @Query("DELETE FROM sync_conflicts WHERE id = :id")
     suspend fun deleteConflictById(id: Long)
 }

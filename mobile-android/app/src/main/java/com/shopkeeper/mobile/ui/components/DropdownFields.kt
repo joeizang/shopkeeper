@@ -34,6 +34,18 @@ enum class ConditionGradeOption(val label: String, val code: Int) {
     C("C", 3)
 }
 
+enum class StaffRoleOption(val label: String, val apiValue: String) {
+    ShopManager("Shop Manager", "ShopManager"),
+    Salesperson("Salesperson", "Salesperson");
+
+    companion object {
+        fun fromApiValue(value: String): StaffRoleOption {
+            return entries.firstOrNull { it.apiValue.equals(value, ignoreCase = true) }
+                ?: if (value.equals("Staff", ignoreCase = true)) ShopManager else Salesperson
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PaymentMethodDropdown(
@@ -120,6 +132,53 @@ fun ConditionGradeDropdown(
                     text = { Text(grade.label) },
                     onClick = {
                         onSelected(grade)
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun StaffRoleDropdown(
+    selected: StaffRoleOption,
+    onSelected: (StaffRoleOption) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = modifier.fillMaxWidth()
+    ) {
+        OutlinedTextField(
+            value = selected.label,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("Staff Role") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                focusedLabelColor = MaterialTheme.colorScheme.secondary,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                focusedTextColor = MaterialTheme.colorScheme.secondary,
+                unfocusedTextColor = MaterialTheme.colorScheme.secondary
+            ),
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
+        )
+
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            StaffRoleOption.entries.forEach { role ->
+                DropdownMenuItem(
+                    text = { Text(role.label) },
+                    onClick = {
+                        onSelected(role)
                         expanded = false
                     }
                 )

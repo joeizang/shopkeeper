@@ -18,9 +18,12 @@ import com.shopkeeper.mobile.core.data.remote.CreateSaleResponse
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentRequest
 import com.shopkeeper.mobile.core.data.remote.CreditDetailResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentViewDto
+import com.shopkeeper.mobile.core.data.remote.CreateExpenseRequestDto
+import com.shopkeeper.mobile.core.data.remote.ExpenseViewDto
 import com.shopkeeper.mobile.core.data.remote.GoogleMobileAuthRequest
 import com.shopkeeper.mobile.core.data.remote.InventoryItemResponse
 import com.shopkeeper.mobile.core.data.remote.InventoryReportResponseDto
+import com.shopkeeper.mobile.core.data.remote.InviteStaffRequestDto
 import com.shopkeeper.mobile.core.data.remote.LoginRequest
 import com.shopkeeper.mobile.core.data.remote.LinkedIdentityViewDto
 import com.shopkeeper.mobile.core.data.remote.MagicLinkRequestDto
@@ -28,21 +31,30 @@ import com.shopkeeper.mobile.core.data.remote.MagicLinkRequestResponseDto
 import com.shopkeeper.mobile.core.data.remote.MagicLinkVerifyRequestDto
 import com.shopkeeper.mobile.core.data.remote.NetworkFactory
 import com.shopkeeper.mobile.core.data.remote.ProfitLossReportResponseDto
+import com.shopkeeper.mobile.core.data.remote.QueueReportJobRequestDto
 import com.shopkeeper.mobile.core.data.remote.RegisterOwnerRequest
+import com.shopkeeper.mobile.core.data.remote.ReportFileViewDto
+import com.shopkeeper.mobile.core.data.remote.ReportJobViewDto
 import com.shopkeeper.mobile.core.data.remote.SaleSyncPayload
 import com.shopkeeper.mobile.core.data.remote.SalesReportResponseDto
 import com.shopkeeper.mobile.core.data.remote.SessionViewDto
 import com.shopkeeper.mobile.core.data.remote.SaleLineRequest
 import com.shopkeeper.mobile.core.data.remote.SalePaymentRequest
+import com.shopkeeper.mobile.core.data.remote.ShopViewDto
+import com.shopkeeper.mobile.core.data.remote.StaffMembershipViewDto
 import com.shopkeeper.mobile.core.data.remote.SyncPushChange
 import com.shopkeeper.mobile.core.data.remote.SyncPullRequest
 import com.shopkeeper.mobile.core.data.remote.SyncPushRequest
 import com.shopkeeper.mobile.core.data.remote.UpdateAccountProfileRequestDto
+import com.shopkeeper.mobile.core.data.remote.UpdateExpenseRequestDto
+import com.shopkeeper.mobile.core.data.remote.UpdateStaffMembershipRequestDto
+import com.shopkeeper.mobile.core.data.remote.UpdateShopVatSettingsRequestDto
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import retrofit2.HttpException
+import org.json.JSONObject
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
@@ -113,13 +125,109 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
-    fun isOwnerSession(): Boolean {
-        val role = sessionManager.role()
-        if (role.isNullOrBlank()) {
-            return true
+    suspend fun getCurrentShop(): Result<ShopSummary> = withContext(Dispatchers.IO) {
+        try {
+            val currentShopId = sessionManager.shopId()
+            val shops = withAuthRetry { api.getMyShops() }.map { it.toModel() }
+            val selected = shops.firstOrNull { it.id == currentShopId } ?: shops.firstOrNull()
+                ?: return@withContext Result.failure(IllegalStateException("No active shop found."))
+            Result.success(selected)
+        } catch (ex: Exception) {
+            Result.failure(ex)
         }
-        return role.equals("Owner", ignoreCase = true)
     }
+
+    suspend fun updateShopVatSettings(
+        shopId: String,
+        vatEnabled: Boolean,
+        vatRate: Double,
+        defaultDiscountPercent: Double,
+        rowVersionBase64: String?
+    ): Result<ShopSummary> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.updateShopVatSettings(
+                        shopId,
+                        UpdateShopVatSettingsRequestDto(
+                            vatEnabled = vatEnabled,
+                            vatRate = vatRate,
+                            defaultDiscountPercent = defaultDiscountPercent,
+                            rowVersionBase64 = rowVersionBase64
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getShopStaff(shopId: String): Result<List<StaffMemberRecord>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getShopStaff(shopId).map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun inviteShopStaff(
+        shopId: String,
+        fullName: String,
+        email: String?,
+        phone: String?,
+        temporaryPassword: String,
+        role: ShopRole
+    ): Result<StaffMemberRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.inviteShopStaff(
+                        shopId,
+                        InviteStaffRequestDto(
+                            fullName = fullName.trim(),
+                            email = email?.trim()?.ifBlank { null },
+                            phone = phone?.trim()?.ifBlank { null },
+                            temporaryPassword = temporaryPassword,
+                            role = role.apiValue
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun updateShopStaff(
+        shopId: String,
+        staffId: String,
+        role: ShopRole,
+        isActive: Boolean
+    ): Result<StaffMemberRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.updateShopStaff(
+                        shopId,
+                        staffId,
+                        UpdateStaffMembershipRequestDto(
+                            role = role.apiValue,
+                            isActive = isActive
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    fun sessionRole(): ShopRole = ShopRole.fromApiValue(sessionManager.role())
+
+    fun sessionCapabilities(): SessionCapabilities = SessionCapabilities.forRole(sessionRole())
+
+    fun isOwnerSession(): Boolean = sessionCapabilities().canManageShopSettings
 
     suspend fun getAccountProfile(): Result<AccountProfile> = withContext(Dispatchers.IO) {
         try {
@@ -155,6 +263,15 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     suspend fun revokeAccountSession(sessionId: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             withAuthRetry { api.revokeAccountSession(sessionId) }
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun revokeAllAccountSessions(): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            withAuthRetry { api.revokeAllAccountSessions() }
             Result.success(Unit)
         } catch (ex: Exception) {
             Result.failure(ex)
@@ -259,6 +376,139 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
+    suspend fun getExpenses(
+        fromDateIso: String? = null,
+        toDateIso: String? = null
+    ): Result<List<ExpenseRecord>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getExpenses(fromDateIso, toDateIso).map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun createExpense(input: ExpenseInput): Result<ExpenseRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.createExpense(
+                        CreateExpenseRequestDto(
+                            title = input.title.trim(),
+                            category = input.category.trim(),
+                            amount = input.amount,
+                            expenseDateUtc = input.expenseDateUtcIso,
+                            notes = input.notes?.trim()?.ifBlank { null }
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun updateExpense(input: ExpenseRecord): Result<ExpenseRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.updateExpense(
+                        input.id,
+                        UpdateExpenseRequestDto(
+                            title = input.title.trim(),
+                            category = input.category.trim(),
+                            amount = input.amount,
+                            expenseDateUtc = input.expenseDateUtcIso,
+                            notes = input.notes?.trim()?.ifBlank { null },
+                            rowVersionBase64 = input.rowVersionBase64
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun deleteExpense(expenseId: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            withAuthRetry { api.deleteExpense(expenseId) }
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getReportJobs(): Result<List<ReportJobRecord>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getReportJobs().map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun queueReportJob(
+        reportType: ReportType,
+        format: ReportExportFormat,
+        fromDateIso: String? = null,
+        toDateIso: String? = null
+    ): Result<ReportJobRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(
+                withAuthRetry {
+                    api.queueReportJob(
+                        QueueReportJobRequestDto(
+                            reportType = reportType.apiName,
+                            format = format.apiValue,
+                            fromUtc = fromDateIso?.let { "${it}T00:00:00Z" },
+                            toUtc = toDateIso?.let { "${it}T23:59:59Z" }
+                        )
+                    ).toModel()
+                }
+            )
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getReportJob(reportJobId: String): Result<ReportJobRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getReportJob(reportJobId).toModel() })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun retryReportJob(reportJobId: String): Result<ReportJobRecord> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.retryReportJob(reportJobId).toModel() })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun getReportFiles(): Result<List<ReportFileRecord>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(withAuthRetry { api.getReportFiles().map { it.toModel() } })
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun downloadReportFile(reportFileId: String, preferredFileName: String? = null): Result<File> = withContext(Dispatchers.IO) {
+        try {
+            val response = withAuthRetry { api.downloadReportFile(reportFileId) }
+            val extension = preferredFileName
+                ?.substringAfterLast('.', "")
+                ?.ifBlank { "bin" }
+                ?: "bin"
+            val tempFile = File.createTempFile("report-$reportFileId-", ".$extension", appContext.cacheDir)
+            tempFile.outputStream().use { output -> output.write(response.bytes()) }
+            Result.success(tempFile)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
     suspend fun exportReportFile(
         reportType: ReportType,
         format: ReportExportFormat,
@@ -275,7 +525,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 )
             }
 
-            val extension = if (format == ReportExportFormat.Pdf) "pdf" else "csv"
+            val extension = if (format == ReportExportFormat.Pdf) "pdf" else "xlsx"
             val directory = File(appContext.cacheDir, "reports").apply { mkdirs() }
             val filename = "${reportType.apiName}-${System.currentTimeMillis()}.$extension"
             val file = File(directory, filename)
@@ -433,12 +683,14 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             require(saleLines.isNotEmpty()) { "Sale must contain at least one line item." }
 
             val subtotal = saleLines.sumOf { it.unitPrice * it.quantity }
-            val total = (subtotal - input.discountAmount).coerceAtLeast(0.0)
-            val outstanding = if (input.isCredit) {
-                (total - input.paidAmount).coerceAtLeast(0.0)
+            val vatAmount = if (input.vatEnabled) {
+                ((subtotal - input.discountAmount).coerceAtLeast(0.0) * input.vatRate).coerceAtLeast(0.0)
             } else {
                 0.0
             }
+            val total = ((subtotal - input.discountAmount).coerceAtLeast(0.0) + vatAmount).coerceAtLeast(0.0)
+            val paidAmount = input.payments.sumOf { it.amount.coerceAtLeast(0.0) }
+            val outstanding = (total - paidAmount).coerceAtLeast(0.0)
             val lineSummary = input.lines.joinToString(separator = ", ") { line ->
                 "${line.productName} x${line.quantity}"
             }
@@ -447,16 +699,19 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 customerName = input.customerName,
                 customerPhone = input.customerPhone,
                 discountAmount = input.discountAmount,
-                isCredit = input.isCredit,
+                isCredit = input.isCredit || outstanding > 0.0,
                 dueDateUtc = input.dueDateUtcIso,
                 lines = saleLines,
-                initialPayments = listOf(
-                    SalePaymentRequest(
-                        method = input.paymentMethodCode,
-                        amount = input.paidAmount,
-                        reference = input.paymentReference
-                    )
-                )
+                initialPayments = input.payments
+                    .filter { it.amount > 0.0 }
+                    .map {
+                        SalePaymentRequest(
+                            method = it.paymentMethodCode,
+                            amount = it.amount,
+                            reference = it.paymentReference
+                        )
+                    }
+                    .ifEmpty { null }
             )
 
             db.salesDao().upsert(
@@ -467,12 +722,12 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     customerPhone = input.customerPhone,
                     lineItemsSummary = lineSummary,
                     subtotal = subtotal,
-                    vatAmount = 0.0,
+                    vatAmount = vatAmount,
                     discountAmount = input.discountAmount,
                     totalAmount = total,
                     outstandingAmount = outstanding,
                     status = if (outstanding > 0) "PARTIALLY_PAID" else "COMPLETED",
-                    isCredit = input.isCredit,
+                    isCredit = input.isCredit || outstanding > 0.0,
                     dueDateUtcIso = input.dueDateUtcIso,
                     updatedAtUtcIso = now
                 )
@@ -559,6 +814,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     }
 
     suspend fun resolveConflictKeepServer(conflictId: Long) = withContext(Dispatchers.IO) {
+        val conflict = db.syncDao().getConflictById(conflictId) ?: return@withContext
+        applyConflictServerSnapshot(conflict)
         db.syncDao().deleteConflictById(conflictId)
     }
 
@@ -568,9 +825,9 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             SyncQueueEntity(
                 entityName = conflict.entityName,
                 entityId = conflict.entityId,
-                operation = QueueOperation.Create,
+                operation = resolveConflictOperation(conflict),
                 payloadJson = conflict.localPayloadJson,
-                rowVersionBase64 = null,
+                rowVersionBase64 = extractServerRowVersion(conflict.serverPayloadJson),
                 enqueuedAtUtcIso = Instant.now().toString(),
                 retryCount = 0
             )
@@ -579,37 +836,66 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     }
 
     suspend fun runSyncOnce(): SyncRunSummary = withContext(Dispatchers.IO) {
-        val pending = db.syncDao().getPending(limit = 50)
+        val pending = db.syncDao().getPending(limit = 100)
         if (pending.isEmpty()) {
             val pullApplied = runCatching { pullAndApplyServerChanges() }.getOrElse { 0 }
             return@withContext SyncRunSummary(pullApplied, 0, 0)
         }
 
+        val activePending = pending.filter { it.retryCount < MAX_SYNC_RETRIES }
+        val exhaustedPending = pending.filter { it.retryCount >= MAX_SYNC_RETRIES }
+        exhaustedPending.forEach { change ->
+            recordSyncConflict(
+                entityName = change.entityName,
+                entityId = change.entityId,
+                serverPayloadJson = "",
+                localPayloadJson = change.payloadJson,
+                conflictReason = "Sync retry limit reached. Review and resolve manually."
+            )
+            db.syncDao().deleteById(change.id)
+        }
+
+        if (activePending.isEmpty()) {
+            val pullApplied = runCatching { pullAndApplyServerChanges() }.getOrElse { 0 }
+            return@withContext SyncRunSummary(pullApplied, exhaustedPending.size, 0)
+        }
+
         var accepted = 0
-        var conflicts = 0
+        var conflicts = exhaustedPending.size
         var transientFailures = 0
 
-        pending.forEach { change ->
+        activePending.forEach { change ->
             try {
-                when (change.entityName) {
-                    QueueEntity.InventoryCreate -> syncInventoryCreate(change)
-                    QueueEntity.SaleCreate -> syncSaleCreate(change)
-                    QueueEntity.CreditRepaymentCreate -> syncCreditRepayment(change)
+                val acceptedChange = when (change.entityName) {
+                    QueueEntity.InventoryCreate -> {
+                        syncInventoryCreate(change)
+                        true
+                    }
+                    QueueEntity.SaleCreate -> {
+                        syncSaleCreate(change)
+                        true
+                    }
+                    QueueEntity.CreditRepaymentCreate -> {
+                        syncCreditRepayment(change)
+                        true
+                    }
                     else -> pushGenericSync(change)
                 }
-                db.syncDao().deleteById(change.id)
-                accepted++
+                if (acceptedChange) {
+                    db.syncDao().deleteById(change.id)
+                    accepted++
+                } else {
+                    db.syncDao().deleteById(change.id)
+                    conflicts++
+                }
             } catch (httpEx: HttpException) {
                 if (httpEx.code() == 409) {
-                    db.syncDao().addConflict(
-                        SyncConflictEntity(
-                            entityName = change.entityName,
-                            entityId = change.entityId,
-                            serverPayloadJson = httpEx.response()?.errorBody()?.string().orEmpty(),
-                            localPayloadJson = change.payloadJson,
-                            conflictReason = "Conflict detected (${httpEx.code()})",
-                            createdAtUtcIso = Instant.now().toString()
-                        )
+                    recordSyncConflict(
+                        entityName = change.entityName,
+                        entityId = change.entityId,
+                        serverPayloadJson = httpEx.response()?.errorBody()?.string().orEmpty(),
+                        localPayloadJson = change.payloadJson,
+                        conflictReason = "Conflict detected (${httpEx.code()})"
                     )
                     if (change.entityName == QueueEntity.InventoryCreate) {
                         db.pendingItemPhotoDao().deleteByLocalItem(change.entityId)
@@ -618,11 +904,35 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     conflicts++
                 } else {
                     transientFailures++
-                    db.syncDao().incrementRetryCount(change.id)
+                    if (change.retryCount + 1 >= MAX_SYNC_RETRIES) {
+                        recordSyncConflict(
+                            entityName = change.entityName,
+                            entityId = change.entityId,
+                            serverPayloadJson = "",
+                            localPayloadJson = change.payloadJson,
+                            conflictReason = "Sync failed repeatedly and was moved to conflicts."
+                        )
+                        db.syncDao().deleteById(change.id)
+                        conflicts++
+                    } else {
+                        db.syncDao().incrementRetryCount(change.id)
+                    }
                 }
             } catch (_: Exception) {
                 transientFailures++
-                db.syncDao().incrementRetryCount(change.id)
+                if (change.retryCount + 1 >= MAX_SYNC_RETRIES) {
+                    recordSyncConflict(
+                        entityName = change.entityName,
+                        entityId = change.entityId,
+                        serverPayloadJson = "",
+                        localPayloadJson = change.payloadJson,
+                        conflictReason = "Sync failed repeatedly and was moved to conflicts."
+                    )
+                    db.syncDao().deleteById(change.id)
+                    conflicts++
+                } else {
+                    db.syncDao().incrementRetryCount(change.id)
+                }
             }
         }
 
@@ -674,8 +984,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
-    private suspend fun pushGenericSync(change: SyncQueueEntity) {
-        withAuthRetry {
+    private suspend fun pushGenericSync(change: SyncQueueEntity): Boolean {
+        val response = withAuthRetry {
             api.pushChanges(
                 SyncPushRequest(
                     changes = listOf(
@@ -697,6 +1007,21 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 )
             )
         }
+
+        if (response.conflicts.isNotEmpty()) {
+            response.conflicts.forEach { conflict ->
+                recordSyncConflict(
+                    entityName = change.entityName,
+                    entityId = change.entityId,
+                    serverPayloadJson = conflict.serverPayloadJson.orEmpty(),
+                    localPayloadJson = change.payloadJson,
+                    conflictReason = conflict.reason
+                )
+            }
+            return false
+        }
+
+        return true
     }
 
     private suspend fun pullAndApplyServerChanges(): Int {
@@ -745,6 +1070,73 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         val payload = saleSyncPayloadAdapter.fromJson(change.payloadJson) ?: return false
         db.salesDao().upsert(payload.toEntity())
         return true
+    }
+
+    private suspend fun applyConflictServerSnapshot(conflict: SyncConflictEntity) {
+        if (conflict.serverPayloadJson.isBlank()) {
+            if (conflict.localPayloadJson.trim() == "{}" && conflict.entityName == QueueEntity.InventorySync) {
+                db.inventoryDao().deleteById(conflict.entityId)
+            }
+            return
+        }
+
+        when (conflict.entityName) {
+            QueueEntity.InventorySync, QueueEntity.InventoryCreate, "InventoryItem" -> {
+                val payload = inventoryResponseAdapter.fromJson(conflict.serverPayloadJson) ?: return
+                db.inventoryDao().upsert(payload.toEntity())
+            }
+
+            QueueEntity.SaleCreate, "Sale" -> {
+                val payload = saleSyncPayloadAdapter.fromJson(conflict.serverPayloadJson) ?: return
+                db.salesDao().upsert(payload.toEntity())
+            }
+        }
+    }
+
+    private suspend fun recordSyncConflict(
+        entityName: String,
+        entityId: String,
+        serverPayloadJson: String,
+        localPayloadJson: String,
+        conflictReason: String
+    ) {
+        db.syncDao().deleteConflictsByEntity(entityName, entityId)
+        db.syncDao().addConflict(
+            SyncConflictEntity(
+                entityName = entityName,
+                entityId = entityId,
+                serverPayloadJson = serverPayloadJson,
+                localPayloadJson = localPayloadJson,
+                conflictReason = conflictReason,
+                createdAtUtcIso = Instant.now().toString()
+            )
+        )
+    }
+
+    private fun resolveConflictOperation(conflict: SyncConflictEntity): String {
+        if (conflict.localPayloadJson.trim() == "{}") {
+            return QueueOperation.Delete
+        }
+        return if (conflict.entityName == QueueEntity.InventoryCreate || conflict.serverPayloadJson.isBlank()) {
+            QueueOperation.Create
+        } else {
+            QueueOperation.Update
+        }
+    }
+
+    private fun extractServerRowVersion(serverPayloadJson: String): String? {
+        if (serverPayloadJson.isBlank()) {
+            return null
+        }
+
+        return runCatching {
+            val json = JSONObject(serverPayloadJson)
+            when {
+                json.has("rowVersionBase64") -> json.optString("rowVersionBase64").ifBlank { null }
+                json.has("RowVersionBase64") -> json.optString("RowVersionBase64").ifBlank { null }
+                else -> null
+            }
+        }.getOrNull()
     }
 
     private suspend fun <T> withAuthRetry(block: suspend () -> T): T {
@@ -947,14 +1339,20 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     }
 
     private fun ProfitLossReportResponseDto.toPreview(): ReportPreview {
-        val lines = listOf(
-            "Range: ${fromUtc.take(10)} to ${toUtc.take(10)}",
-            "Revenue: NGN ${"%.2f".format(revenue)}",
-            "COGS: NGN ${"%.2f".format(cogs)}",
-            "Gross Profit: NGN ${"%.2f".format(grossProfit)}",
-            "Expenses: NGN ${"%.2f".format(expenses)}",
-            "Net Profit/Loss: NGN ${"%.2f".format(netProfitLoss)}"
-        )
+        val lines = buildList {
+            add("Range: ${fromUtc.take(10)} to ${toUtc.take(10)}")
+            add("Revenue: NGN ${"%.2f".format(revenue)}")
+            add("COGS: NGN ${"%.2f".format(cogs)}")
+            add("Gross Profit: NGN ${"%.2f".format(grossProfit)}")
+            add("Expenses: NGN ${"%.2f".format(expenses)}")
+            add("Net Profit/Loss: NGN ${"%.2f".format(netProfitLoss)}")
+            if (expenseBreakdown.isNotEmpty()) {
+                add("")
+                expenseBreakdown.forEach {
+                    add("${it.category}: NGN ${"%.2f".format(it.amount)}")
+                }
+            }
+        }
         return ReportPreview("Profit & Loss", lines)
     }
 
@@ -1031,6 +1429,71 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             saleId = account.saleId,
             outstandingAmount = account.outstandingAmount,
             repayments = repayments.map { it.toModel() }
+        )
+    }
+
+    private fun ShopViewDto.toModel(): ShopSummary {
+        return ShopSummary(
+            id = id,
+            name = name,
+            code = code,
+            vatEnabled = vatEnabled,
+            vatRate = vatRate,
+            defaultDiscountPercent = defaultDiscountPercent,
+            role = ShopRole.fromApiValue(role).apiValue,
+            rowVersionBase64 = rowVersionBase64
+        )
+    }
+
+    private fun StaffMembershipViewDto.toModel(): StaffMemberRecord {
+        return StaffMemberRecord(
+            staffId = staffId,
+            userId = userId,
+            fullName = fullName,
+            email = email,
+            phone = phone,
+            role = ShopRole.fromApiValue(role),
+            isActive = isActive,
+            createdAtUtc = createdAtUtc
+        )
+    }
+
+    private fun ExpenseViewDto.toModel(): ExpenseRecord {
+        return ExpenseRecord(
+            id = id,
+            title = title,
+            category = category,
+            amount = amount,
+            expenseDateUtcIso = expenseDateUtc,
+            notes = notes,
+            createdAtUtc = createdAtUtc,
+            rowVersionBase64 = rowVersionBase64
+        )
+    }
+
+    private fun ReportJobViewDto.toModel(): ReportJobRecord {
+        return ReportJobRecord(
+            id = id,
+            reportType = reportType,
+            format = format,
+            status = status,
+            filterJson = filterJson,
+            reportFileId = reportFileId,
+            requestedAtUtc = requestedAtUtc,
+            completedAtUtc = completedAtUtc,
+            failureReason = failureReason
+        )
+    }
+
+    private fun ReportFileViewDto.toModel(): ReportFileRecord {
+        return ReportFileRecord(
+            id = id,
+            reportType = reportType,
+            format = format,
+            fileName = fileName,
+            contentType = contentType,
+            byteLength = byteLength,
+            createdAtUtc = createdAtUtc
         )
     }
 
@@ -1127,7 +1590,7 @@ enum class ReportType(val apiName: String, val label: String) {
 
 enum class ReportExportFormat(val apiValue: String, val label: String, val mimeType: String) {
     Pdf("pdf", "PDF", "application/pdf"),
-    Spreadsheet("spreadsheet", "Spreadsheet", "text/csv")
+    Spreadsheet("spreadsheet", "Spreadsheet", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 }
 
 data class NewInventoryInput(
@@ -1147,13 +1610,13 @@ data class NewInventoryInput(
 data class NewSaleInput(
     val lines: List<NewSaleLineInput>,
     val discountAmount: Double,
-    val paidAmount: Double,
-    val paymentMethodCode: Int,
-    val paymentReference: String?,
+    val payments: List<NewSalePaymentInput>,
     val customerName: String?,
     val customerPhone: String?,
     val isCredit: Boolean,
-    val dueDateUtcIso: String?
+    val dueDateUtcIso: String?,
+    val vatEnabled: Boolean,
+    val vatRate: Double
 )
 
 data class NewSaleLineInput(
@@ -1161,6 +1624,12 @@ data class NewSaleLineInput(
     val productName: String,
     val quantity: Int,
     val unitPrice: Double
+)
+
+data class NewSalePaymentInput(
+    val amount: Double,
+    val paymentMethodCode: Int,
+    val paymentReference: String?
 )
 
 data class CreditRepaymentInput(
@@ -1185,6 +1654,106 @@ data class CreditSaleOption(
     val customerName: String,
     val itemSummary: String,
     val outstandingAmount: Double
+)
+
+data class ShopSummary(
+    val id: String,
+    val name: String,
+    val code: String,
+    val vatEnabled: Boolean,
+    val vatRate: Double,
+    val defaultDiscountPercent: Double,
+    val role: String,
+    val rowVersionBase64: String
+)
+
+enum class ShopRole(val apiValue: String, val displayName: String) {
+    Owner("Owner", "Owner"),
+    ShopManager("ShopManager", "Shop Manager"),
+    Salesperson("Salesperson", "Salesperson");
+
+    companion object {
+        fun fromApiValue(value: String?): ShopRole {
+            return when {
+                value.isNullOrBlank() -> Owner
+                value.equals("Owner", ignoreCase = true) -> Owner
+                value.equals("ShopManager", ignoreCase = true) || value.equals("Staff", ignoreCase = true) -> ShopManager
+                else -> Salesperson
+            }
+        }
+    }
+}
+
+data class SessionCapabilities(
+    val role: ShopRole,
+    val canManageShopSettings: Boolean,
+    val canManageStaff: Boolean,
+    val canManageInventory: Boolean,
+    val canManageSales: Boolean,
+    val canViewReports: Boolean,
+    val canViewProfitLoss: Boolean
+) {
+    companion object {
+        fun forRole(role: ShopRole): SessionCapabilities {
+            return when (role) {
+                ShopRole.Owner -> SessionCapabilities(role, true, true, true, true, true, true)
+                ShopRole.ShopManager -> SessionCapabilities(role, false, false, true, true, true, false)
+                ShopRole.Salesperson -> SessionCapabilities(role, false, false, false, true, false, false)
+            }
+        }
+    }
+}
+
+data class StaffMemberRecord(
+    val staffId: String,
+    val userId: String,
+    val fullName: String,
+    val email: String?,
+    val phone: String?,
+    val role: ShopRole,
+    val isActive: Boolean,
+    val createdAtUtc: String
+)
+
+data class ExpenseInput(
+    val title: String,
+    val category: String,
+    val amount: Double,
+    val expenseDateUtcIso: String,
+    val notes: String?
+)
+
+data class ExpenseRecord(
+    val id: String,
+    val title: String,
+    val category: String,
+    val amount: Double,
+    val expenseDateUtcIso: String,
+    val notes: String?,
+    val createdAtUtc: String,
+    val rowVersionBase64: String
+)
+
+data class ReportJobRecord(
+    val id: String,
+    val reportType: String,
+    val format: String,
+    val status: String,
+    val filterJson: String?,
+    val reportFileId: String?,
+    val requestedAtUtc: String,
+    val completedAtUtc: String?,
+    val failureReason: String?
+)
+
+data class ReportFileRecord(
+    val id: String,
+    val reportType: String,
+    val format: String,
+    val fileName: String,
+    val contentType: String,
+    val byteLength: Long,
+    val createdAtUtc: String
 )
 
 data class CreditDetail(
@@ -1234,3 +1803,5 @@ private object QueueOperation {
     const val Update = "UPDATE"
     const val Delete = "DELETE"
 }
+
+private const val MAX_SYNC_RETRIES = 5

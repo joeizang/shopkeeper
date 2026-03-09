@@ -189,10 +189,104 @@ public sealed class ApiIntegrationTests
             fullName = "Cross Tenant Staff",
             email = "cross-tenant@shopkeeper.local",
             phone = (string?)null,
-            temporaryPassword = "Staff1234"
+            temporaryPassword = "Staff1234",
+            role = "ShopManager"
         });
 
         Assert.Equal(HttpStatusCode.Forbidden, inviteResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task Salesperson_CannotAccessInventoryOrReports_ButCanCreateSales()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-sales-role@shopkeeper.local", "Role Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "ROLE-1001");
+        var salesperson = await InviteStaffAndLogin(client, owner.ShopId, "salesperson@shopkeeper.local", "Salesperson", "Salesperson");
+        SetBearer(client, salesperson.AccessToken);
+
+        var inventoryResponse = await client.PostAsJsonAsync("/api/v1/inventory/items", new
+        {
+            productName = "Blocked Item",
+            modelNumber = "B-1",
+            serialNumber = "BLOCKED-1",
+            quantity = 1,
+            expiryDate = (string?)null,
+            costPrice = 10m,
+            sellingPrice = 20m,
+            itemType = 1,
+            conditionGrade = (int?)null,
+            conditionNotes = (string?)null
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, inventoryResponse.StatusCode);
+
+        var reportsResponse = await client.GetAsync("/api/v1/reports/inventory");
+        Assert.Equal(HttpStatusCode.Forbidden, reportsResponse.StatusCode);
+
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Walk In",
+            customerPhone = "08032222222",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 2150m, reference = (string?)null }
+            }
+        });
+        saleResponse.EnsureSuccessStatusCode();
+    }
+
+    [Fact]
+    public async Task ShopManager_CanManageInventory_ButCannotUpdateOwnerOnlySettings()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-manager-role@shopkeeper.local", "Manager Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var manager = await InviteStaffAndLogin(client, owner.ShopId, "manager@shopkeeper.local", "ShopManager", "Manager");
+        SetBearer(client, manager.AccessToken);
+
+        var inventoryResponse = await client.PostAsJsonAsync("/api/v1/inventory/items", new
+        {
+            productName = "Manager Added Item",
+            modelNumber = "M-1",
+            serialNumber = "MANAGER-1",
+            quantity = 2,
+            expiryDate = (string?)null,
+            costPrice = 100m,
+            sellingPrice = 220m,
+            itemType = 2,
+            conditionGrade = 2,
+            conditionNotes = "Managed"
+        });
+        inventoryResponse.EnsureSuccessStatusCode();
+
+        var patchSettingsResponse = await client.PatchAsJsonAsync($"/api/v1/shops/{owner.ShopId}/settings", new
+        {
+            vatEnabled = true,
+            vatRate = 0.1m,
+            defaultDiscountPercent = 0.05m,
+            rowVersionBase64 = (string?)null
+        });
+        Assert.Equal(HttpStatusCode.Forbidden, patchSettingsResponse.StatusCode);
     }
 
     [Fact]
@@ -271,6 +365,278 @@ public sealed class ApiIntegrationTests
         Assert.Equal("Africa/Lagos", updated.Timezone);
     }
 
+    [Fact]
+    public async Task Owner_CanUpdateShopVatSettings()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-vat@shopkeeper.local", "Vat Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var shopsResponse = await client.GetAsync("/api/v1/shops/me");
+        shopsResponse.EnsureSuccessStatusCode();
+        var shops = (await shopsResponse.Content.ReadFromJsonAsync<List<ShopEnvelope>>())!;
+        var shop = Assert.Single(shops);
+
+        var patchResponse = await client.PatchAsJsonAsync($"/api/v1/shops/{shop.Id}/settings", new
+        {
+            vatEnabled = true,
+            vatRate = 0.1m,
+            defaultDiscountPercent = 0.05m,
+            rowVersionBase64 = shop.RowVersionBase64
+        });
+        patchResponse.EnsureSuccessStatusCode();
+
+        var updated = (await patchResponse.Content.ReadFromJsonAsync<ShopEnvelope>())!;
+        Assert.True(updated.VatEnabled);
+        Assert.Equal(0.1m, updated.VatRate);
+        Assert.Equal(0.05m, updated.DefaultDiscountPercent);
+        Assert.NotEqual(shop.RowVersionBase64, updated.RowVersionBase64);
+    }
+
+    [Fact]
+    public async Task ProfitLoss_UsesRecordedExpenses_ForNetProfit()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-profit@shopkeeper.local", "Profit Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "PL-5001");
+
+        var createSaleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Profit Buyer",
+            customerPhone = "08032222222",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 2, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 4300m, reference = "CASH-PL" }
+            }
+        });
+        createSaleResponse.EnsureSuccessStatusCode();
+
+        var expenseResponse = await client.PostAsJsonAsync("/api/v1/expenses/", new
+        {
+            title = "Shop Rent",
+            category = "Operations",
+            amount = 500m,
+            expenseDateUtc = DateTime.UtcNow.Date
+        });
+        expenseResponse.EnsureSuccessStatusCode();
+
+        var today = DateTime.UtcNow.ToString("yyyy-MM-dd");
+        var profitLossResponse = await client.GetAsync($"/api/v1/reports/profit-loss?from={today}&to={today}");
+        profitLossResponse.EnsureSuccessStatusCode();
+        var report = (await profitLossResponse.Content.ReadFromJsonAsync<ProfitLossEnvelope>())!;
+
+        Assert.Equal(4300m, report.Revenue);
+        Assert.Equal(2000m, report.Cogs);
+        Assert.Equal(2300m, report.GrossProfit);
+        Assert.Equal(500m, report.Expenses);
+        Assert.Equal(1800m, report.NetProfitLoss);
+        Assert.Contains(report.ExpenseBreakdown, x => x.Category == "Operations" && x.Amount == 500m);
+    }
+
+    [Fact]
+    public async Task ReportExport_PersistsJobAndFile_AndSupportsDownload()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-reports@shopkeeper.local", "Reports Shop");
+        SetBearer(client, owner.AccessToken);
+
+        await CreateInventoryItem(client, "RP-6001");
+
+        var exportResponse = await client.GetAsync("/api/v1/reports/inventory/export?format=spreadsheet");
+        exportResponse.EnsureSuccessStatusCode();
+
+        var filesResponse = await client.GetAsync("/api/v1/reports/files");
+        filesResponse.EnsureSuccessStatusCode();
+        var files = (await filesResponse.Content.ReadFromJsonAsync<List<ReportFileEnvelope>>())!;
+        Assert.NotEmpty(files);
+
+        var jobsResponse = await client.GetAsync("/api/v1/reports/jobs");
+        jobsResponse.EnsureSuccessStatusCode();
+        var jobs = (await jobsResponse.Content.ReadFromJsonAsync<List<ReportJobEnvelope>>())!;
+        Assert.NotEmpty(jobs);
+        Assert.Contains(jobs, x => x.ReportFileId == files[0].Id && x.Status == "Completed");
+
+        var downloadResponse = await client.GetAsync($"/api/v1/reports/files/{files[0].Id}/download");
+        downloadResponse.EnsureSuccessStatusCode();
+        Assert.True((await downloadResponse.Content.ReadAsByteArrayAsync()).Length > 0);
+    }
+
+    [Fact]
+    public async Task RevokeAllSessions_RevokesEveryActiveSession()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-sessions@shopkeeper.local", "Session Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var secondLoginResponse = await client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            login = owner.Email,
+            password = "Shopkeeper123!",
+            shopId = owner.ShopId
+        });
+        secondLoginResponse.EnsureSuccessStatusCode();
+
+        var revokeAllResponse = await client.PostAsync("/api/v1/account/sessions/revoke-all", content: null);
+        revokeAllResponse.EnsureSuccessStatusCode();
+
+        var sessionsResponse = await client.GetAsync("/api/v1/account/sessions");
+        sessionsResponse.EnsureSuccessStatusCode();
+        var sessions = (await sessionsResponse.Content.ReadFromJsonAsync<List<SessionEnvelope>>())!;
+
+        Assert.NotEmpty(sessions);
+        Assert.All(sessions, session => Assert.True(session.IsRevoked));
+    }
+
+    [Fact]
+    public async Task QueuedReportJob_CompletesAndProducesDownloadableFile()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-queued-reports@shopkeeper.local", "Queued Reports Shop");
+        SetBearer(client, owner.AccessToken);
+
+        await CreateInventoryItem(client, "QR-7001");
+
+        var queueResponse = await client.PostAsJsonAsync("/api/v1/reports/jobs", new
+        {
+            reportType = "inventory",
+            format = "spreadsheet",
+            fromUtc = (DateTime?)null,
+            toUtc = (DateTime?)null
+        });
+        Assert.Equal(HttpStatusCode.Accepted, queueResponse.StatusCode);
+        var queuedJob = (await queueResponse.Content.ReadFromJsonAsync<ReportJobEnvelope>())!;
+
+        ReportJobEnvelope? completed = null;
+        for (var attempt = 0; attempt < 20; attempt++)
+        {
+            await Task.Delay(300);
+            var getResponse = await client.GetAsync($"/api/v1/reports/jobs/{queuedJob.Id}");
+            getResponse.EnsureSuccessStatusCode();
+            completed = await getResponse.Content.ReadFromJsonAsync<ReportJobEnvelope>();
+            if (completed?.Status == "Completed" && completed.ReportFileId.HasValue)
+            {
+                break;
+            }
+        }
+
+        Assert.NotNull(completed);
+        Assert.Equal("Completed", completed!.Status);
+        Assert.NotNull(completed.ReportFileId);
+
+        var downloadResponse = await client.GetAsync($"/api/v1/reports/files/{completed.ReportFileId}/download");
+        downloadResponse.EnsureSuccessStatusCode();
+        Assert.True((await downloadResponse.Content.ReadAsByteArrayAsync()).Length > 0);
+    }
+
+    [Fact]
+    public async Task SyncPush_UpdateAndDeleteInventoryItem_MutatesServerState()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-sync@shopkeeper.local", "Sync Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "SYNC-8001");
+
+        var updatePayload = """
+            {
+              "productName": "Updated Used Phone",
+              "modelNumber": "Pixel-7",
+              "serialNumber": "SYNC-8001",
+              "quantity": 3,
+              "expiryDate": null,
+              "costPrice": 1000,
+              "sellingPrice": 2200,
+              "itemType": 2,
+              "conditionGrade": 2,
+              "conditionNotes": "Updated offline"
+            }
+            """;
+
+        var updateSyncResponse = await client.PostAsJsonAsync("/api/v1/sync/push", new
+        {
+            changes = new[]
+            {
+                new
+                {
+                    deviceId = "test-device",
+                    entityName = "InventoryItem",
+                    entityId = item.Id,
+                    operation = 2,
+                    payloadJson = updatePayload,
+                    clientUpdatedAtUtc = DateTime.UtcNow,
+                    rowVersionBase64 = item.RowVersionBase64
+                }
+            }
+        });
+        updateSyncResponse.EnsureSuccessStatusCode();
+
+        var updatedItemResponse = await client.GetAsync($"/api/v1/inventory/items/{item.Id}");
+        updatedItemResponse.EnsureSuccessStatusCode();
+        var updatedItem = (await updatedItemResponse.Content.ReadFromJsonAsync<InventoryItemEnvelope>())!;
+        Assert.Equal("Updated Used Phone", updatedItem.ProductName);
+        Assert.Equal(3, updatedItem.Quantity);
+
+        var deleteSyncResponse = await client.PostAsJsonAsync("/api/v1/sync/push", new
+        {
+            changes = new[]
+            {
+                new
+                {
+                    deviceId = "test-device",
+                    entityName = "InventoryItem",
+                    entityId = item.Id,
+                    operation = 3,
+                    payloadJson = "{}",
+                    clientUpdatedAtUtc = DateTime.UtcNow,
+                    rowVersionBase64 = updatedItem.RowVersionBase64
+                }
+            }
+        });
+        deleteSyncResponse.EnsureSuccessStatusCode();
+
+        var deletedItemResponse = await client.GetAsync($"/api/v1/inventory/items/{item.Id}");
+        Assert.Equal(HttpStatusCode.NotFound, deletedItemResponse.StatusCode);
+    }
+
     private static async Task<AuthEnvelope> RegisterOwner(HttpClient client, string email, string shopName)
     {
         var suffix = Guid.NewGuid().ToString("N")[..8];
@@ -296,7 +662,7 @@ public sealed class ApiIntegrationTests
             throw new Xunit.Sdk.XunitException(
                 $"RegisterOwner failed: {(int)response.StatusCode} {response.StatusCode}. Body: {body}");
         }
-        return (await response.Content.ReadFromJsonAsync<AuthEnvelope>())!;
+        return ((await response.Content.ReadFromJsonAsync<AuthEnvelope>())!) with { Email = uniqueEmail };
     }
 
     private static async Task<InventoryItemEnvelope> CreateInventoryItem(HttpClient client, string serial)
@@ -322,6 +688,32 @@ public sealed class ApiIntegrationTests
                 $"CreateInventoryItem failed: {(int)response.StatusCode} {response.StatusCode}. Body: {body}. WWW-Authenticate: {authHeaders}");
         }
         return (await response.Content.ReadFromJsonAsync<InventoryItemEnvelope>())!;
+    }
+
+    private static async Task<AuthEnvelope> InviteStaffAndLogin(HttpClient client, Guid shopId, string email, string role, string name)
+    {
+        var inviteResponse = await client.PostAsJsonAsync($"/api/v1/shops/{shopId}/staff/invite", new
+        {
+            fullName = name,
+            email,
+            phone = (string?)null,
+            temporaryPassword = "Shopkeeper123!",
+            role
+        });
+        inviteResponse.EnsureSuccessStatusCode();
+        var invited = (await inviteResponse.Content.ReadFromJsonAsync<StaffMembershipEnvelope>())!;
+
+        var activateResponse = await client.PostAsync($"/api/v1/shops/{shopId}/staff/{invited.StaffId}/activate", content: null);
+        activateResponse.EnsureSuccessStatusCode();
+
+        var loginResponse = await client.PostAsJsonAsync("/api/v1/auth/login", new
+        {
+            login = email,
+            password = "Shopkeeper123!",
+            shopId
+        });
+        loginResponse.EnsureSuccessStatusCode();
+        return (await loginResponse.Content.ReadFromJsonAsync<AuthEnvelope>())!;
     }
 
     private static void SetBearer(HttpClient client, string accessToken)
@@ -371,8 +763,9 @@ public sealed class ApiIntegrationTests
         }
     }
 
-    private sealed record AuthEnvelope(string AccessToken, string RefreshToken, DateTime AccessTokenExpiresAtUtc, Guid ShopId, string Role);
-    private sealed record InventoryItemEnvelope(Guid Id, string RowVersionBase64);
+    private sealed record AuthEnvelope(string AccessToken, string RefreshToken, DateTime AccessTokenExpiresAtUtc, Guid ShopId, string Role, string? Email = null);
+    private sealed record InventoryItemEnvelope(Guid Id, string ProductName, int Quantity, string RowVersionBase64);
+    private sealed record ShopEnvelope(Guid Id, string Name, string Code, bool VatEnabled, decimal VatRate, decimal DefaultDiscountPercent, string Role, string RowVersionBase64);
     private sealed record CreateSaleEnvelope(Guid Id, string SaleNumber, decimal TotalAmount, decimal OutstandingAmount);
     private sealed record SalePaymentEnvelope(Guid Id, decimal Amount, string Method, string? Reference);
     private sealed record SaleDetailsEnvelope(
@@ -386,6 +779,46 @@ public sealed class ApiIntegrationTests
     private sealed record CreditAccountEnvelope(Guid Id, Guid SaleId, DateTime DueDateUtc, decimal OutstandingAmount, int Status);
     private sealed record CreditDetailsEnvelope(CreditAccountEnvelope Account);
     private sealed record MagicLinkRequestEnvelope(Guid RequestId, DateTime ExpiresAtUtc, string Message, string? DebugToken);
+    private sealed record StaffMembershipEnvelope(Guid StaffId, Guid UserId, string FullName, string? Email, string? Phone, string Role, bool IsActive, DateTime CreatedAtUtc);
+    private sealed record ExpenseCategoryEnvelope(string Category, decimal Amount);
+    private sealed record ProfitLossEnvelope(
+        DateTime GeneratedAtUtc,
+        DateTime FromUtc,
+        DateTime ToUtc,
+        decimal Revenue,
+        decimal Cogs,
+        decimal GrossProfit,
+        decimal Expenses,
+        decimal NetProfitLoss,
+        List<ExpenseCategoryEnvelope> ExpenseBreakdown);
+    private sealed record ReportFileEnvelope(
+        Guid Id,
+        string ReportType,
+        string Format,
+        string FileName,
+        string ContentType,
+        long ByteLength,
+        DateTime CreatedAtUtc);
+    private sealed record ReportJobEnvelope(
+        Guid Id,
+        string ReportType,
+        string Format,
+        string Status,
+        string? FilterJson,
+        Guid? ReportFileId,
+        DateTime RequestedAtUtc,
+        DateTime? CompletedAtUtc,
+        string? FailureReason);
+    private sealed record SessionEnvelope(
+        Guid SessionId,
+        Guid ShopId,
+        string Role,
+        string? DeviceId,
+        string? DeviceName,
+        DateTime CreatedAtUtc,
+        DateTime ExpiresAtUtc,
+        DateTime? LastSeenAtUtc,
+        bool IsRevoked);
     private sealed record AccountProfileEnvelope(
         Guid UserId,
         string FullName,

@@ -15,6 +15,7 @@ public static class AccountEndpoints
         group.MapGet("/me", GetMe);
         group.MapPatch("/me", UpdateMe);
         group.MapGet("/sessions", GetSessions);
+        group.MapPost("/sessions/revoke-all", RevokeAllSessions);
         group.MapPost("/sessions/{id:guid}/revoke", RevokeSession);
         group.MapGet("/linked-identities", GetLinkedIdentities);
 
@@ -67,6 +68,20 @@ public static class AccountEndpoints
         if (user is null)
         {
             return Results.NotFound();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.AvatarUrl))
+        {
+            var trimmedUrl = request.AvatarUrl.Trim();
+            if (trimmedUrl.Length > 2048 ||
+                !Uri.TryCreate(trimmedUrl, UriKind.Absolute, out var parsedUri) ||
+                (parsedUri.Scheme != Uri.UriSchemeHttp && parsedUri.Scheme != Uri.UriSchemeHttps))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["avatarUrl"] = ["Avatar URL must be a valid http or https URL, max 2048 characters."]
+                });
+            }
         }
 
         user.FullName = request.FullName.Trim();
@@ -166,6 +181,49 @@ public static class AccountEndpoints
         }
 
         return Results.Ok(new { sessionId = session.Id, status = "revoked" });
+    }
+
+    private static async Task<IResult> RevokeAllSessions(
+        ShopkeeperDbContext db,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var userId = tenant.GetUserId(httpContext.User);
+        if (!userId.HasValue)
+        {
+            return Results.Unauthorized();
+        }
+
+        var sessions = await db.RefreshTokens
+            .Include(x => x.ShopMembership)
+            .Where(x => x.UserAccountId == userId.Value && !x.RevokedAtUtc.HasValue)
+            .ToListAsync(ct);
+
+        if (sessions.Count == 0)
+        {
+            return Results.Ok(new { revokedCount = 0, status = "no-active-sessions" });
+        }
+
+        var revokedAtUtc = DateTime.UtcNow;
+        var tenantId = tenant.GetTenantId(httpContext.User) ?? Guid.Empty;
+
+        foreach (var session in sessions)
+        {
+            session.RevokedAtUtc = revokedAtUtc;
+            db.AuditLogs.Add(new Domain.AuditLog
+            {
+                TenantId = tenantId,
+                UserAccountId = userId.Value,
+                Action = "account.session.revoke_all",
+                EntityName = nameof(Domain.RefreshToken),
+                EntityId = session.Id,
+                PayloadJson = "{}"
+            });
+        }
+
+        await db.SaveChangesAsync(ct);
+        return Results.Ok(new { revokedCount = sessions.Count, status = "revoked" });
     }
 
     private static async Task<IResult> GetLinkedIdentities(

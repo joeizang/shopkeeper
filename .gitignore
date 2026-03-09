@@ -22,6 +22,9 @@ captures/
 # IDE
 .idea/
 .vscode/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
 
 # Logs
 *.log

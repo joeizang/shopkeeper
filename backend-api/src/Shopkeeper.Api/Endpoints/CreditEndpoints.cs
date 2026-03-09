@@ -17,7 +17,7 @@ public static class CreditEndpoints
     public static IEndpointRouteBuilder MapCreditEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/credits")
-            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.StaffOrOwner });
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.SalesAccess });
 
         group.MapGet("/", ListCredits);
         group.MapGet("/{saleId:guid}", GetCredit);
@@ -27,6 +27,8 @@ public static class CreditEndpoints
     }
 
     private static async Task<IResult> ListCredits(
+        [FromQuery] int page,
+        [FromQuery] int limit,
         ShopkeeperDbContext db,
         TenantContextAccessor tenant,
         HttpContext httpContext,
@@ -38,13 +40,19 @@ public static class CreditEndpoints
             return Results.Unauthorized();
         }
 
-        var credits = await db.CreditAccounts
-            .Where(x => x.TenantId == tenantId.Value)
+        var effectivePage = Math.Max(1, page == 0 ? 1 : page);
+        var effectiveLimit = Math.Clamp(limit == 0 ? 100 : limit, 1, 200);
+
+        var query = db.CreditAccounts.Where(x => x.TenantId == tenantId.Value);
+        var total = await query.CountAsync(ct);
+        var credits = await query
             .OrderByDescending(x => x.CreatedAtUtc)
+            .Skip((effectivePage - 1) * effectiveLimit)
+            .Take(effectiveLimit)
             .Select(x => new CreditAccountView(x.Id, x.SaleId, x.DueDateUtc, x.OutstandingAmount, x.Status))
             .ToListAsync(ct);
 
-        return Results.Ok(credits);
+        return Results.Ok(new { total, page = effectivePage, limit = effectiveLimit, items = credits });
     }
 
     private static async Task<IResult> GetCredit(
@@ -153,19 +161,19 @@ public static class CreditEndpoints
             EntityName = nameof(Sale),
             EntityId = sale.Id,
             Operation = SyncOperation.Update,
-            PayloadJson = JsonSerializer.Serialize(new
+            PayloadJson = SyncJson.Serialize(new
             {
-                sale.Id,
-                sale.SaleNumber,
-                sale.Subtotal,
-                sale.VatAmount,
-                sale.DiscountAmount,
-                sale.TotalAmount,
-                sale.OutstandingAmount,
-                Status = sale.Status.ToString(),
-                sale.IsCredit,
-                sale.DueDateUtc,
-                sale.UpdatedAtUtc
+                id = sale.Id,
+                saleNumber = sale.SaleNumber,
+                subtotal = sale.Subtotal,
+                vatAmount = sale.VatAmount,
+                discountAmount = sale.DiscountAmount,
+                totalAmount = sale.TotalAmount,
+                outstandingAmount = sale.OutstandingAmount,
+                status = sale.Status.ToString(),
+                isCredit = sale.IsCredit,
+                dueDateUtc = sale.DueDateUtc,
+                updatedAtUtc = sale.UpdatedAtUtc
             }),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });

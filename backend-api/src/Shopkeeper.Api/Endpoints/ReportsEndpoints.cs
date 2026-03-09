@@ -12,13 +12,19 @@ public static class ReportsEndpoints
     public static IEndpointRouteBuilder MapReportsEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/reports")
-            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.StaffOrOwner });
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.ReportingAccess });
 
         group.MapGet("/inventory", GetInventoryReport);
         group.MapGet("/sales", GetSalesReport);
         group.MapGet("/profit-loss", GetProfitLossReport)
             .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.OwnerOnly });
         group.MapGet("/creditors", GetCreditorsReport);
+        group.MapPost("/jobs", QueueReportJob);
+        group.MapGet("/jobs", GetReportJobs);
+        group.MapGet("/jobs/{id:guid}", GetReportJob);
+        group.MapPost("/jobs/{id:guid}/retry", RetryReportJob);
+        group.MapGet("/files", GetReportFiles);
+        group.MapGet("/files/{id:guid}/download", DownloadReportFile);
         group.MapGet("/{reportType}/export", ExportReport);
 
         return app;
@@ -101,13 +107,70 @@ public static class ReportsEndpoints
         return Results.Ok(report);
     }
 
+    // ExportReport queues an async job and returns 202 Accepted with the job ID.
+    // Poll GET /api/v1/reports/jobs/{id} until Status == "Completed", then download
+    // the file via GET /api/v1/reports/files/{fileId}/download.
     private static async Task<IResult> ExportReport(
         string reportType,
         [FromQuery] string? format,
         [FromQuery] string? from,
         [FromQuery] string? to,
         ReportingService reporting,
-        ReportDocumentRenderer renderer,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        var userId = tenant.GetUserId(httpContext.User);
+        if (!tenantId.HasValue || !userId.HasValue) return Results.Unauthorized();
+
+        var normalizedFormat = format?.Trim().ToLowerInvariant();
+        if (normalizedFormat is not ("pdf" or "spreadsheet" or "csv" or "xlsx"))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["format"] = ["Use pdf or spreadsheet."] });
+        }
+        var canonicalFormat = normalizedFormat is "pdf" ? "pdf" : "spreadsheet";
+
+        var normalizedType = reportType.Trim().ToLowerInvariant();
+        if (normalizedType is not ("inventory" or "sales" or "profit-loss" or "creditors"))
+        {
+            return Results.NotFound(new { message = $"Unknown report type '{reportType}'." });
+        }
+
+        if (normalizedType == "profit-loss" &&
+            !RoleCapabilities.IsOwner(RoleCapabilities.GetRole(httpContext.User) ?? MembershipRole.Salesperson))
+        {
+            return Results.Forbid();
+        }
+
+        DateTime? fromUtc = null;
+        DateTime? toUtc = null;
+        if (normalizedType is "sales" or "profit-loss")
+        {
+            var range = ResolveDateRange(from, to);
+            if (range.error is not null)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
+            }
+            fromUtc = range.fromUtc;
+            toUtc = range.toUtc;
+        }
+        else if (normalizedType == "creditors")
+        {
+            fromUtc = ParseDateStart(from);
+            toUtc = ParseDateEnd(to);
+            if ((from is not null && !fromUtc.HasValue) || (to is not null && !toUtc.HasValue))
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = ["Invalid date format. Use YYYY-MM-DD."] });
+            }
+        }
+
+        var job = await reporting.QueueReportJob(tenantId.Value, userId.Value, normalizedType, canonicalFormat, fromUtc, toUtc, ct);
+        return Results.Accepted($"/api/v1/reports/jobs/{job.Id}", job);
+    }
+
+    private static async Task<IResult> GetReportJobs(
+        ReportingService reporting,
         TenantContextAccessor tenant,
         HttpContext httpContext,
         CancellationToken ct)
@@ -115,236 +178,110 @@ public static class ReportsEndpoints
         var tenantId = tenant.GetTenantId(httpContext.User);
         if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var exportKind = NormalizeFormat(format);
-        if (exportKind is null)
+        var jobs = await reporting.ListReportJobs(tenantId.Value, ct);
+        return Results.Ok(jobs);
+    }
+
+    private static async Task<IResult> QueueReportJob(
+        [FromBody] QueueReportJobRequest request,
+        ReportingService reporting,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        var userId = tenant.GetUserId(httpContext.User);
+        if (!tenantId.HasValue || !userId.HasValue) return Results.Unauthorized();
+
+        var normalizedType = request.ReportType.Trim().ToLowerInvariant();
+        var normalizedFormat = request.Format.Trim().ToLowerInvariant();
+        if (normalizedFormat is not ("pdf" or "spreadsheet"))
         {
             return Results.ValidationProblem(new Dictionary<string, string[]> { ["format"] = ["Use pdf or spreadsheet."] });
         }
 
-        var normalizedType = reportType.Trim().ToLowerInvariant();
+        if (normalizedType is not ("inventory" or "sales" or "profit-loss" or "creditors"))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["reportType"] = ["Unsupported report type."] });
+        }
 
         if (normalizedType == "profit-loss" &&
-            !httpContext.User.HasClaim(c => c.Type == CustomClaimTypes.Role && c.Value == MembershipRole.Owner.ToString()))
+            !RoleCapabilities.IsOwner(RoleCapabilities.GetRole(httpContext.User) ?? MembershipRole.Salesperson))
         {
             return Results.Forbid();
         }
 
-        switch (normalizedType)
-        {
-            case "inventory":
-            {
-                var report = await reporting.BuildInventoryReport(tenantId.Value, ct);
-                return BuildExportResponse(
-                    exportKind.Value,
-                    renderer,
-                    "inventory",
-                    InventoryCsvRows(report),
-                    InventoryPdfLines(report));
-            }
-            case "sales":
-            {
-                var range = ResolveDateRange(from, to);
-                if (range.error is not null)
-                {
-                    return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
-                }
-                var report = await reporting.BuildSalesReport(tenantId.Value, range.fromUtc, range.toUtc, ct);
-                return BuildExportResponse(
-                    exportKind.Value,
-                    renderer,
-                    "sales",
-                    SalesCsvRows(report),
-                    SalesPdfLines(report));
-            }
-            case "profit-loss":
-            {
-                var range = ResolveDateRange(from, to);
-                if (range.error is not null)
-                {
-                    return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = [range.error] });
-                }
-                var report = await reporting.BuildProfitLossReport(tenantId.Value, range.fromUtc, range.toUtc, ct);
-                return BuildExportResponse(
-                    exportKind.Value,
-                    renderer,
-                    "profit-loss",
-                    ProfitLossCsvRows(report),
-                    ProfitLossPdfLines(report));
-            }
-            case "creditors":
-            {
-                var fromUtc = ParseDateStart(from);
-                var toUtc = ParseDateEnd(to);
-                if ((from is not null && !fromUtc.HasValue) || (to is not null && !toUtc.HasValue))
-                {
-                    return Results.ValidationProblem(new Dictionary<string, string[]> { ["dateRange"] = ["Invalid date format. Use YYYY-MM-DD."] });
-                }
-                var report = await reporting.BuildCreditorsReport(tenantId.Value, fromUtc, toUtc, ct);
-                return BuildExportResponse(
-                    exportKind.Value,
-                    renderer,
-                    "creditors",
-                    CreditorsCsvRows(report),
-                    CreditorsPdfLines(report));
-            }
-            default:
-                return Results.NotFound(new { message = $"Unknown report type '{reportType}'." });
-        }
+        var job = await reporting.QueueReportJob(
+            tenantId.Value,
+            userId.Value,
+            normalizedType,
+            normalizedFormat,
+            request.FromUtc,
+            request.ToUtc,
+            ct);
+
+        return Results.Accepted($"/api/v1/reports/jobs/{job.Id}", job);
     }
 
-    private static IResult BuildExportResponse(
-        ExportKind exportKind,
-        ReportDocumentRenderer renderer,
-        string reportType,
-        IEnumerable<string[]> csvRows,
-        IEnumerable<string> pdfLines)
+    private static async Task<IResult> GetReportJob(
+        Guid id,
+        ReportingService reporting,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
     {
-        var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-        if (exportKind == ExportKind.Pdf)
-        {
-            var bytes = renderer.RenderSimplePdf($"{reportType.ToUpperInvariant()} REPORT", pdfLines);
-            return Results.File(bytes, "application/pdf", $"{reportType}-report-{stamp}.pdf");
-        }
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue) return Results.Unauthorized();
 
-        var csv = renderer.RenderCsv(csvRows);
-        return Results.File(csv, "text/csv", $"{reportType}-report-{stamp}.csv");
+        var job = await reporting.GetReportJob(tenantId.Value, id, ct);
+        return job is null
+            ? Results.NotFound()
+            : Results.Ok(new ReportJobView(job.Id, job.ReportType, job.Format, job.Status, job.FilterJson, job.ReportFileId, job.RequestedAtUtc, job.CompletedAtUtc, job.FailureReason));
     }
 
-    private static IEnumerable<string[]> InventoryCsvRows(InventoryReportResponse report)
+    private static async Task<IResult> RetryReportJob(
+        Guid id,
+        ReportingService reporting,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["TotalProducts", report.TotalProducts.ToString()];
-        yield return ["TotalUnits", report.TotalUnits.ToString()];
-        yield return ["LowStockItems", report.LowStockItems.ToString()];
-        yield return ["TotalCostValue", report.TotalCostValue.ToString("0.00")];
-        yield return ["TotalSellingValue", report.TotalSellingValue.ToString("0.00")];
-        yield return [];
-        yield return ["ItemId", "ProductName", "Quantity", "CostPrice", "SellingPrice", "CostValue", "SellingValue", "ExpiryDate"];
-        foreach (var row in report.Items)
-        {
-            yield return
-            [
-                row.ItemId.ToString(),
-                row.ProductName,
-                row.Quantity.ToString(),
-                row.CostPrice.ToString("0.00"),
-                row.SellingPrice.ToString("0.00"),
-                row.CostValue.ToString("0.00"),
-                row.SellingValue.ToString("0.00"),
-                row.ExpiryDate?.ToString("yyyy-MM-dd") ?? ""
-            ];
-        }
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue) return Results.Unauthorized();
+
+        var retried = await reporting.RetryReportJob(tenantId.Value, id, ct);
+        return retried is null
+            ? Results.NotFound()
+            : Results.Accepted($"/api/v1/reports/jobs/{retried.Id}", retried);
     }
 
-    private static IEnumerable<string> InventoryPdfLines(InventoryReportResponse report)
+    private static async Task<IResult> GetReportFiles(
+        ReportingService reporting,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
     {
-        yield return $"Products: {report.TotalProducts}";
-        yield return $"Units: {report.TotalUnits}";
-        yield return $"Low Stock: {report.LowStockItems}";
-        yield return $"Cost Value: NGN {report.TotalCostValue:0.00}";
-        yield return $"Selling Value: NGN {report.TotalSellingValue:0.00}";
-        yield return string.Empty;
-        foreach (var item in report.Items.Take(50))
-        {
-            yield return $"{item.ProductName} | Qty:{item.Quantity} | Cost:{item.CostPrice:0.00} | Sell:{item.SellingPrice:0.00}";
-        }
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue) return Results.Unauthorized();
+
+        var files = await reporting.ListReportFiles(tenantId.Value, ct);
+        return Results.Ok(files);
     }
 
-    private static IEnumerable<string[]> SalesCsvRows(SalesReportResponse report)
+    private static async Task<IResult> DownloadReportFile(
+        Guid id,
+        ReportingService reporting,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
     {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc.ToString("u")];
-        yield return ["ToUtc", report.ToUtc.ToString("u")];
-        yield return ["SalesCount", report.SalesCount.ToString()];
-        yield return ["Revenue", report.Revenue.ToString("0.00")];
-        yield return ["VatAmount", report.VatAmount.ToString("0.00")];
-        yield return ["DiscountAmount", report.DiscountAmount.ToString("0.00")];
-        yield return ["OutstandingAmount", report.OutstandingAmount.ToString("0.00")];
-        yield return [];
-        yield return ["DailyDate", "SalesCount", "Revenue", "Outstanding"];
-        foreach (var day in report.Daily)
-        {
-            yield return [day.Date.ToString("yyyy-MM-dd"), day.SalesCount.ToString(), day.Revenue.ToString("0.00"), day.Outstanding.ToString("0.00")];
-        }
-        yield return [];
-        yield return ["PaymentMethod", "Amount"];
-        foreach (var payment in report.Payments)
-        {
-            yield return [payment.Method, payment.Amount.ToString("0.00")];
-        }
-    }
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue) return Results.Unauthorized();
 
-    private static IEnumerable<string> SalesPdfLines(SalesReportResponse report)
-    {
-        yield return $"Range: {report.FromUtc:yyyy-MM-dd} to {report.ToUtc:yyyy-MM-dd}";
-        yield return $"Sales Count: {report.SalesCount}";
-        yield return $"Revenue: NGN {report.Revenue:0.00}";
-        yield return $"VAT: NGN {report.VatAmount:0.00}";
-        yield return $"Discount: NGN {report.DiscountAmount:0.00}";
-        yield return $"Outstanding: NGN {report.OutstandingAmount:0.00}";
-        yield return string.Empty;
-        foreach (var day in report.Daily.Take(40))
-        {
-            yield return $"{day.Date:yyyy-MM-dd} | Sales:{day.SalesCount} | Revenue:{day.Revenue:0.00} | Outstanding:{day.Outstanding:0.00}";
-        }
-    }
-
-    private static IEnumerable<string[]> ProfitLossCsvRows(ProfitLossReportResponse report)
-    {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc.ToString("u")];
-        yield return ["ToUtc", report.ToUtc.ToString("u")];
-        yield return ["Revenue", report.Revenue.ToString("0.00")];
-        yield return ["COGS", report.Cogs.ToString("0.00")];
-        yield return ["GrossProfit", report.GrossProfit.ToString("0.00")];
-        yield return ["Expenses", report.Expenses.ToString("0.00")];
-        yield return ["NetProfitLoss", report.NetProfitLoss.ToString("0.00")];
-    }
-
-    private static IEnumerable<string> ProfitLossPdfLines(ProfitLossReportResponse report)
-    {
-        yield return $"Range: {report.FromUtc:yyyy-MM-dd} to {report.ToUtc:yyyy-MM-dd}";
-        yield return $"Revenue: NGN {report.Revenue:0.00}";
-        yield return $"COGS: NGN {report.Cogs:0.00}";
-        yield return $"Gross Profit: NGN {report.GrossProfit:0.00}";
-        yield return $"Expenses: NGN {report.Expenses:0.00}";
-        yield return $"Net Profit/Loss: NGN {report.NetProfitLoss:0.00}";
-    }
-
-    private static IEnumerable<string[]> CreditorsCsvRows(CreditorsReportResponse report)
-    {
-        yield return ["GeneratedAtUtc", report.GeneratedAtUtc.ToString("u")];
-        yield return ["FromUtc", report.FromUtc?.ToString("u") ?? ""];
-        yield return ["ToUtc", report.ToUtc?.ToString("u") ?? ""];
-        yield return ["OpenCredits", report.OpenCredits.ToString()];
-        yield return ["TotalOutstanding", report.TotalOutstanding.ToString("0.00")];
-        yield return [];
-        yield return ["CreditAccountId", "SaleNumber", "CustomerName", "ItemsSummary", "DueDateUtc", "DaysOverdue", "OutstandingAmount", "Status"];
-        foreach (var row in report.Credits)
-        {
-            yield return
-            [
-                row.CreditAccountId.ToString(),
-                row.SaleNumber,
-                row.CustomerName,
-                row.ItemsSummary,
-                row.DueDateUtc.ToString("u"),
-                row.DaysOverdue.ToString(),
-                row.OutstandingAmount.ToString("0.00"),
-                row.Status
-            ];
-        }
-    }
-
-    private static IEnumerable<string> CreditorsPdfLines(CreditorsReportResponse report)
-    {
-        yield return $"Open Credits: {report.OpenCredits}";
-        yield return $"Total Outstanding: NGN {report.TotalOutstanding:0.00}";
-        yield return string.Empty;
-        foreach (var row in report.Credits.Take(50))
-        {
-            yield return $"{row.CustomerName} | {row.SaleNumber} | Due:{row.DueDateUtc:yyyy-MM-dd} | Out:{row.OutstandingAmount:0.00}";
-        }
+        var file = await reporting.GetReportFile(tenantId.Value, id, ct);
+        return file is null
+            ? Results.NotFound()
+            : Results.File(file.Content, file.ContentType, file.FileName);
     }
 
     private static (DateTime fromUtc, DateTime toUtc, string? error) ResolveDateRange(string? fromRaw, string? toRaw)

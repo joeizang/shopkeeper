@@ -35,6 +35,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.shopkeeper.mobile.credits.CreditScreen
+import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.dashboard.DashboardScreen
 import com.shopkeeper.mobile.inventory.InventoryScreen
 import com.shopkeeper.mobile.profile.ProfileScreen
@@ -44,18 +45,40 @@ import com.shopkeeper.mobile.sync.ConflictResolutionScreen
 import com.shopkeeper.mobile.ui.components.ShopkeeperBackground
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun ShopkeeperApp() {
+    val context = LocalContext.current
+    val gateway = androidx.compose.runtime.remember(context) { ShopkeeperDataGateway.get(context) }
+    val capabilities = gateway.sessionCapabilities()
     val navController = rememberNavController()
-    val tabs = listOf(
-        NavTab("dashboard", "Home", Icons.Outlined.Dashboard),
-        NavTab("inventory", "Stock", Icons.Outlined.Inventory),
-        NavTab("sales", "Sales", Icons.Outlined.PointOfSale),
-        NavTab("reports", "Reports", Icons.Outlined.QueryStats),
-        NavTab("credits", "Credit", Icons.Outlined.CreditCard),
-        NavTab("conflicts", "Sync", Icons.Outlined.SyncProblem)
-    )
+    val tabs = buildList {
+        add(NavTab("dashboard", "Home", Icons.Outlined.Dashboard))
+        if (capabilities.canManageInventory) add(NavTab("inventory", "Stock", Icons.Outlined.Inventory))
+        if (capabilities.canManageSales) add(NavTab("sales", "Sales", Icons.Outlined.PointOfSale))
+        if (capabilities.canViewReports) add(NavTab("reports", "Reports", Icons.Outlined.QueryStats))
+        if (capabilities.canManageSales) add(NavTab("credits", "Credit", Icons.Outlined.CreditCard))
+        add(NavTab("conflicts", "Sync", Icons.Outlined.SyncProblem))
+    }
+
+    fun navigateToTab(route: String) {
+        val currentRoute = navController.currentBackStackEntry?.destination?.route
+        if (currentRoute == route) {
+            return
+        }
+
+        val restoredExistingDestination = navController.popBackStack(route, inclusive = false)
+        if (!restoredExistingDestination) {
+            navController.navigate(route) {
+                popUpTo(navController.graph.findStartDestination().id) {
+                    saveState = true
+                }
+                launchSingleTop = true
+                restoreState = true
+            }
+        }
+    }
 
     ShopkeeperBackground(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -89,15 +112,7 @@ fun ShopkeeperApp() {
                                 val selected = currentDestination?.hierarchy?.any { it.route == tab.route } == true
                                 NavigationBarItem(
                                     selected = selected,
-                                    onClick = {
-                                        navController.navigate(tab.route) {
-                                            popUpTo(navController.graph.findStartDestination().id) {
-                                                saveState = true
-                                            }
-                                            launchSingleTop = true
-                                            restoreState = true
-                                        }
-                                    },
+                                    onClick = { navigateToTab(tab.route) },
                                     label = {
                                         Text(
                                             text = tab.label,
@@ -134,11 +149,19 @@ fun ShopkeeperApp() {
                                 }
                             )
                         }
-                        composable("inventory") { InventoryScreen() }
-                        composable("sales") { SalesScreen() }
-                        composable("reports") { ReportsScreen() }
+                        if (capabilities.canManageInventory) {
+                            composable("inventory") { InventoryScreen() }
+                        }
+                        if (capabilities.canManageSales) {
+                            composable("sales") { SalesScreen() }
+                        }
+                        if (capabilities.canViewReports) {
+                            composable("reports") { ReportsScreen() }
+                        }
                         composable("profile") { ProfileScreen() }
-                        composable("credits") { CreditScreen() }
+                        if (capabilities.canManageSales) {
+                            composable("credits") { CreditScreen() }
+                        }
                         composable("conflicts") { ConflictResolutionScreen() }
                     }
                 }

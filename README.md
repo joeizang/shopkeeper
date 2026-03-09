@@ -2,6 +2,7 @@
 
 Multi-tenant Shop Management SaaS with:
 - Android app (`mobile-android`) built with Kotlin + Compose.
+- iPhone app (`mobile-ios`) built with SwiftUI.
 - Backend API (`backend-api`) built with ASP.NET Core Minimal API + EF Core + SQLite.
 
 ## Repository Layout
@@ -9,6 +10,7 @@ Multi-tenant Shop Management SaaS with:
 - `docs/SHOPKEEPER_IMPLEMENTATION_PLAN.md`: Source-of-truth implementation plan.
 - `backend-api/`: .NET 10 Minimal API solution and tests.
 - `mobile-android/`: Android app (offline-first scaffolding, OCR flow, receipts, sync).
+- `mobile-ios/`: iPhone SwiftUI app shell with role-aware navigation and backend integration.
 
 ## Backend Quick Start
 
@@ -32,6 +34,18 @@ API base path: `/api/v1`
 cd mobile-android
 ./gradlew :app:assembleDebug
 ```
+
+## iOS Quick Start
+
+```bash
+cd mobile-ios
+xcodebuild -project ShopkeeperIOS.xcodeproj -scheme ShopkeeperIOS -destination 'platform=iOS Simulator,name=iPhone 16' build
+```
+
+Notes:
+- Minimum deployment target is `iOS 16.0`.
+- The simulator build expects the backend on `http://127.0.0.1:5057`.
+- Xcode must be installed and the Apple license accepted before `xcodebuild` or `simctl` can run.
 
 ## Implemented Scope
 

@@ -17,12 +17,13 @@ public static class SalesEndpoints
     public static IEndpointRouteBuilder MapSalesEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/sales")
-            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.StaffOrOwner });
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.SalesAccess });
 
         group.MapPost("/", CreateSale);
         group.MapGet("/{id:guid}", GetSale);
         group.MapPost("/{id:guid}/payments", AddPayment);
-        group.MapPost("/{id:guid}/void", VoidSale);
+        group.MapPost("/{id:guid}/void", VoidSale)
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.OwnerOrManager });
         group.MapGet("/{id:guid}/receipt", GetReceipt);
 
         return app;
@@ -75,11 +76,11 @@ public static class SalesEndpoints
         var paidAmount = request.InitialPayments?.Sum(p => p.Amount) ?? 0m;
         var outstanding = Math.Max(0, totals.TotalAmount - paidAmount);
 
-        var saleCount = await db.Sales.CountAsync(x => x.TenantId == tenantId.Value, ct);
+        // Build the sale object before the transaction so all validation is done first.
         var sale = new Sale
         {
             TenantId = tenantId.Value,
-            SaleNumber = $"SL-{DateTime.UtcNow:yyyyMMdd}-{saleCount + 1:0000}",
+            SaleNumber = string.Empty, // assigned atomically inside the transaction below
             CustomerName = request.CustomerName,
             CustomerPhone = request.CustomerPhone,
             DiscountAmount = totals.DiscountAmount,
@@ -123,6 +124,13 @@ public static class SalesEndpoints
             }
         }
 
+        // Wrap the count + insert in an explicit transaction so SQLite serialises concurrent
+        // writers and prevents two requests from receiving the same SaleNumber.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+
+        var saleCount = await db.Sales.CountAsync(x => x.TenantId == tenantId.Value, ct);
+        sale.SaleNumber = $"SL-{DateTime.UtcNow:yyyyMMdd}-{saleCount + 1:0000}";
+
         db.Sales.Add(sale);
 
         if (sale.IsCredit && outstanding > 0)
@@ -153,11 +161,13 @@ public static class SalesEndpoints
             EntityName = nameof(Sale),
             EntityId = sale.Id,
             Operation = SyncOperation.Create,
-            PayloadJson = JsonSerializer.Serialize(BuildSaleSyncPayload(sale)),
+            PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
 
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+
         return Results.Created($"/api/v1/sales/{sale.Id}", new { sale.Id, sale.SaleNumber, sale.TotalAmount, sale.OutstandingAmount });
     }
 
@@ -185,8 +195,7 @@ public static class SalesEndpoints
             return Results.NotFound();
         }
 
-        return Results.Ok(new
-        {
+        return Results.Ok(new SaleDetailResponse(
             sale.Id,
             sale.SaleNumber,
             sale.CustomerName,
@@ -196,29 +205,13 @@ public static class SalesEndpoints
             sale.DiscountAmount,
             sale.TotalAmount,
             sale.OutstandingAmount,
-            Status = sale.Status.ToString(),
+            sale.Status.ToString(),
             sale.IsCredit,
             sale.DueDateUtc,
             sale.IsVoided,
             sale.UpdatedAtUtc,
-            lines = sale.Lines.Select(x => new
-            {
-                x.Id,
-                x.InventoryItemId,
-                x.ProductNameSnapshot,
-                x.Quantity,
-                x.UnitPrice,
-                x.LineTotal
-            }),
-            payments = sale.Payments.Select(x => new
-            {
-                x.Id,
-                Method = x.Method.ToString(),
-                x.Amount,
-                x.Reference,
-                x.CreatedAtUtc
-            })
-        });
+            sale.Lines.Select(x => new SaleLineView(x.Id, x.InventoryItemId, x.ProductNameSnapshot, x.Quantity, x.UnitPrice, x.LineTotal)).ToList(),
+            sale.Payments.Select(x => new SalePaymentView(x.Id, x.Method.ToString(), x.Amount, x.Reference, x.CreatedAtUtc)).ToList()));
     }
 
     private static async Task<IResult> AddPayment(
@@ -295,7 +288,7 @@ public static class SalesEndpoints
             EntityName = nameof(Sale),
             EntityId = sale.Id,
             Operation = SyncOperation.Update,
-            PayloadJson = JsonSerializer.Serialize(BuildSaleSyncPayload(sale)),
+            PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
 
@@ -370,7 +363,7 @@ public static class SalesEndpoints
             EntityName = nameof(Sale),
             EntityId = sale.Id,
             Operation = SyncOperation.Update,
-            PayloadJson = JsonSerializer.Serialize(BuildSaleSyncPayload(sale)),
+            PayloadJson = SyncJson.Serialize(BuildSaleSyncPayload(sale)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
 

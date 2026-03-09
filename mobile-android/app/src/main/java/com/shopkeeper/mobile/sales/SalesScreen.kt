@@ -9,11 +9,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -30,7 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.NewSaleInput
+import com.shopkeeper.mobile.core.data.NewSaleLineInput
+import com.shopkeeper.mobile.core.data.NewSalePaymentInput
 import com.shopkeeper.mobile.core.data.RecordedSale
+import com.shopkeeper.mobile.core.data.ShopSummary
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.core.data.local.InventoryItemEntity
 import com.shopkeeper.mobile.core.data.local.SaleEntity
@@ -58,7 +56,7 @@ fun SalesScreen() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
-    val isOwner = remember { gateway.isOwnerSession() }
+    val capabilities = gateway.sessionCapabilities()
     val clipboardManager = remember(context) {
         context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     }
@@ -66,22 +64,24 @@ fun SalesScreen() {
 
     var customerName by rememberSaveable { mutableStateOf("") }
     var customerPhone by rememberSaveable { mutableStateOf("") }
-    var discount by rememberSaveable { mutableStateOf("0") }
-    var paidAmount by rememberSaveable { mutableStateOf("0") }
-    var paymentRef by rememberSaveable { mutableStateOf("") }
-    var paymentMethodCode by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
-    val paymentMethod = PaymentMethodOption.fromCode(paymentMethodCode)
+    var applyShopDiscount by rememberSaveable { mutableStateOf(false) }
     var dueDateUtc by rememberSaveable { mutableStateOf("") }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var selectedItemId by rememberSaveable { mutableStateOf("") }
     var selectedItemQuantity by rememberSaveable { mutableStateOf("1") }
+    var paymentAmountDraft by rememberSaveable { mutableStateOf("") }
+    var paymentRefDraft by rememberSaveable { mutableStateOf("") }
+    var paymentMethodCodeDraft by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
+    val paymentMethodDraft = PaymentMethodOption.fromCode(paymentMethodCodeDraft)
     var saleLines by rememberSaveable(stateSaver = UiSaleLinesSaver) { mutableStateOf<List<UiSaleLine>>(emptyList()) }
+    var salePayments by rememberSaveable(stateSaver = UiSalePaymentsSaver) { mutableStateOf<List<UiSalePayment>>(emptyList()) }
     var pendingScanActionName by rememberSaveable { mutableStateOf(SalesScanAction.Reference.name) }
     val pendingScanAction = runCatching { SalesScanAction.valueOf(pendingScanActionName) }
         .getOrDefault(SalesScanAction.Reference)
 
     var inventory by remember { mutableStateOf<List<InventoryItemEntity>>(emptyList()) }
     var todayCompletedSales by remember { mutableStateOf<List<SaleEntity>>(emptyList()) }
+    var shopSummary by remember { mutableStateOf<ShopSummary?>(null) }
     var status by rememberSaveable { mutableStateOf("") }
     var lastSale by remember { mutableStateOf<RecordedSale?>(null) }
     var isCreatingSale by rememberSaveable { mutableStateOf(false) }
@@ -92,6 +92,9 @@ fun SalesScreen() {
                 .getOrElse { gateway.getLocalInventory() }
             inventory = inv
             todayCompletedSales = gateway.getTodayCompletedSales()
+            gateway.getCurrentShop()
+                .onSuccess { shopSummary = it }
+                .onFailure { status = "Could not load shop settings: ${it.message.orEmpty()}" }
         }
     }
 
@@ -123,6 +126,24 @@ fun SalesScreen() {
         status = "Customer details imported. You can edit them before saving."
     }
 
+    fun addPaymentSplit() {
+        val amount = paymentAmountDraft.toDoubleOrNull()
+        if (amount == null || amount <= 0.0) {
+            status = "Enter a valid payment amount."
+            return
+        }
+
+        salePayments = salePayments + UiSalePayment(
+            amount = amount,
+            paymentMethodCode = paymentMethodDraft.code,
+            paymentReference = paymentRefDraft.ifBlank { null }
+        )
+        paymentAmountDraft = ""
+        paymentRefDraft = ""
+        paymentMethodCodeDraft = PaymentMethodOption.Cash.code
+        status = "Payment split added."
+    }
+
     val scanLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.TakePicturePreview()
     ) { bitmap: android.graphics.Bitmap? ->
@@ -135,8 +156,8 @@ fun SalesScreen() {
             .addOnSuccessListener { result ->
                 when (pendingScanAction) {
                     SalesScanAction.Reference -> {
-                        paymentRef = extractReferenceText(result.text)
-                        status = "Reference scanned. You can edit before saving."
+                        paymentRefDraft = extractReferenceText(result.text)
+                        status = "Reference scanned. You can edit it before adding the payment split."
                     }
                     SalesScanAction.Customer -> {
                         importCustomerDetails(result.text)
@@ -190,14 +211,21 @@ fun SalesScreen() {
     }
 
     val subtotal = saleLines.sumOf { it.quantity * it.unitPrice }
-    val discountAmount = discount.toDoubleOrNull() ?: 0.0
-    val totalAmount = (subtotal - discountAmount).coerceAtLeast(0.0)
+    val configuredDiscountPercent = shopSummary?.defaultDiscountPercent ?: 0.0
+    val discountAmount = if (applyShopDiscount) subtotal * configuredDiscountPercent else 0.0
+    val vatEnabled = shopSummary?.vatEnabled ?: true
+    val vatRate = shopSummary?.vatRate ?: 0.075
+    val taxableBase = (subtotal - discountAmount).coerceAtLeast(0.0)
+    val vatAmount = if (vatEnabled) taxableBase * vatRate else 0.0
+    val totalAmount = taxableBase + vatAmount
+    val paidAmount = salePayments.sumOf { it.amount }
+    val outstandingAmount = (totalAmount - paidAmount).coerceAtLeast(0.0)
 
     ScreenColumn {
         ScreenHeader(
             title = "Sales",
             subtitle = if (isCreatingSale) {
-                "Build the sale from inventory items, then record payment or credit."
+                "Build the sale, add one or more payment splits, and review VAT before saving."
             } else {
                 "Review today’s completed sales and issue receipts."
             }
@@ -269,7 +297,7 @@ fun SalesScreen() {
                             saleNumber = sale.saleNumber,
                             customerName = customerName,
                             totalAmount = sale.totalAmount,
-                            paymentReference = paymentRef
+                            paymentReference = salePayments.firstOrNull()?.paymentReference
                         )
                         shareReceiptPdf(context, pdfFile)
                     },
@@ -280,7 +308,7 @@ fun SalesScreen() {
         } else {
             SectionTitle(
                 title = "Create sale",
-                subtitle = "Search inventory, add one or more line items, then record payment details."
+                subtitle = "Search inventory, add line items, then capture single or split payments."
             )
 
             Row(
@@ -440,53 +468,120 @@ fun SalesScreen() {
                 }
             }
 
-            SectionTitle(title = "Totals")
-            MetricCard("Subtotal", "NGN ${"%.2f".format(subtotal)}", Modifier.fillMaxWidth())
-            MetricCard("Total", "NGN ${"%.2f".format(totalAmount)}", Modifier.fillMaxWidth())
-
-            OutlinedTextField(
-                value = discount,
-                onValueChange = { discount = it },
-                label = { Text("Discount") },
-                enabled = isOwner,
-                modifier = Modifier.fillMaxWidth()
+            SectionTitle(
+                title = "Tax and totals",
+                subtitle = if (vatEnabled) "VAT is enabled for ${shopSummary?.name ?: "this shop"} at ${vatRate.toPercentString()}." else "VAT is disabled for this shop."
             )
-            if (!isOwner) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MetricCard("Subtotal", "NGN ${"%.2f".format(subtotal)}", Modifier.weight(1f))
+                MetricCard("Discount", "NGN ${"%.2f".format(discountAmount)}", Modifier.weight(1f))
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MetricCard("VAT", "NGN ${"%.2f".format(vatAmount)}", Modifier.weight(1f))
+                MetricCard("Total", "NGN ${"%.2f".format(totalAmount)}", Modifier.weight(1f))
+            }
+
+            if (configuredDiscountPercent > 0.0) {
+                SectionTitle(
+                    title = "Shop discount",
+                    subtitle = "This sale can apply the owner-configured discount of ${configuredDiscountPercent.toPercentString()}."
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    SoftButton(
+                        text = if (applyShopDiscount) "Remove Discount" else "Apply Shop Discount",
+                        onClick = { applyShopDiscount = !applyShopDiscount },
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricCard(
+                        title = "Configured Discount",
+                        value = "NGN ${"%.2f".format(discountAmount)}",
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            } else {
                 Text(
-                    "Discount is editable by owner only.",
+                    if (capabilities.canManageShopSettings) "No default discount is configured for this shop yet. Set it in Profile."
+                    else "No shop discount is configured.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
 
+            SectionTitle(
+                title = "Payment splits",
+                subtitle = "Add one or more payments. Any outstanding balance becomes credit."
+            )
+
             OutlinedTextField(
-                value = paidAmount,
-                onValueChange = { paidAmount = it },
-                label = { Text("Paid Amount") },
+                value = paymentAmountDraft,
+                onValueChange = { paymentAmountDraft = it },
+                label = { Text("Payment Amount") },
                 modifier = Modifier.fillMaxWidth()
             )
 
             PaymentMethodDropdown(
-                selected = paymentMethod,
-                onSelected = { paymentMethodCode = it.code },
+                selected = paymentMethodDraft,
+                onSelected = { paymentMethodCodeDraft = it.code },
                 modifier = Modifier.fillMaxWidth()
             )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = paymentRef,
-                    onValueChange = { paymentRef = it },
+                    value = paymentRefDraft,
+                    onValueChange = { paymentRefDraft = it },
                     label = { Text("POS/Transfer Ref (optional)") },
                     modifier = Modifier.weight(1f)
                 )
-                BrickButton(
+                SoftButton(
                     text = "Scan Ref",
                     onClick = { launchScan(SalesScanAction.Reference) },
                     modifier = Modifier.weight(1f)
                 )
             }
 
+            BrickButton(
+                text = "Add Payment Split",
+                onClick = { addPaymentSplit() },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (salePayments.isEmpty()) {
+                Text("No payment splits added yet.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                salePayments.forEachIndexed { index, payment ->
+                    AccentCard(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "${PaymentMethodOption.fromCode(payment.paymentMethodCode).label} • NGN ${"%.2f".format(payment.amount)}",
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    payment.paymentReference ?: "No reference",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            SoftButton(
+                                text = "Remove",
+                                onClick = { salePayments = salePayments.filterIndexed { paymentIndex, _ -> paymentIndex != index } }
+                            )
+                        }
+                    }
+                }
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MetricCard("Paid", "NGN ${"%.2f".format(paidAmount)}", Modifier.weight(1f))
+                MetricCard("Outstanding", "NGN ${"%.2f".format(outstandingAmount)}", Modifier.weight(1f))
+            }
+
             DatePickerField(
-                label = "Due Date (optional, for credit sale)",
+                label = "Due Date (required when outstanding remains)",
                 value = dueDateUtc,
                 onValueChange = { dueDateUtc = it },
                 modifier = Modifier.fillMaxWidth()
@@ -501,24 +596,35 @@ fun SalesScreen() {
                             return@BrickButton
                         }
 
+                        if (outstandingAmount > 0.0 && dueDateUtc.isBlank()) {
+                            status = "Set a due date for any sale with outstanding balance."
+                            return@BrickButton
+                        }
+
                         scope.launch {
                             val input = NewSaleInput(
                                 lines = saleLines.map {
-                                    com.shopkeeper.mobile.core.data.NewSaleLineInput(
+                                    NewSaleLineInput(
                                         inventoryItemId = it.inventoryItemId,
                                         productName = it.productName,
                                         quantity = it.quantity,
                                         unitPrice = it.unitPrice
                                     )
                                 },
-                                discountAmount = if (isOwner) (discount.toDoubleOrNull() ?: 0.0) else 0.0,
-                                paidAmount = paidAmount.toDoubleOrNull() ?: 0.0,
-                                paymentMethodCode = paymentMethod.code,
-                                paymentReference = paymentRef.ifBlank { null },
+                                discountAmount = discountAmount,
+                                payments = salePayments.map {
+                                    NewSalePaymentInput(
+                                        amount = it.amount,
+                                        paymentMethodCode = it.paymentMethodCode,
+                                        paymentReference = it.paymentReference
+                                    )
+                                },
                                 customerName = customerName.ifBlank { null },
                                 customerPhone = customerPhone.ifBlank { null },
-                                isCredit = dueDateUtc.isNotBlank(),
-                                dueDateUtcIso = dueDateUtc.ifBlank { null }?.let { "${it}T00:00:00Z" }
+                                isCredit = outstandingAmount > 0.0,
+                                dueDateUtcIso = dueDateUtc.ifBlank { null }?.let { "${it}T00:00:00Z" },
+                                vatEnabled = vatEnabled,
+                                vatRate = vatRate
                             )
 
                             val result = gateway.recordSale(input)
@@ -527,9 +633,16 @@ fun SalesScreen() {
                                     lastSale = it
                                     isCreatingSale = false
                                     saleLines = emptyList()
+                                    salePayments = emptyList()
                                     searchQuery = ""
                                     selectedItemId = ""
                                     selectedItemQuantity = "1"
+                                    paymentAmountDraft = ""
+                                    paymentRefDraft = ""
+                                    customerName = ""
+                                    customerPhone = ""
+                                    dueDateUtc = ""
+                                    applyShopDiscount = false
                                     refreshSummary()
                                     if (it.synced) "Sale saved and synced (${it.saleNumber})" else "Sale saved locally, sync pending"
                                 },
@@ -548,14 +661,6 @@ fun SalesScreen() {
     }
 }
 
-private fun formatSaleTime(iso: String): String {
-    return runCatching {
-        val instant = Instant.parse(iso)
-        val local = instant.atZone(ZoneId.systemDefault())
-        local.format(DateTimeFormatter.ofPattern("HH:mm"))
-    }.getOrElse { "--:--" }
-}
-
 private enum class SalesScanAction {
     Reference,
     Customer
@@ -566,6 +671,12 @@ private data class UiSaleLine(
     val productName: String,
     val quantity: Int,
     val unitPrice: Double
+)
+
+private data class UiSalePayment(
+    val amount: Double,
+    val paymentMethodCode: Int,
+    val paymentReference: String?
 )
 
 private val UiSaleLinesSaver = listSaver<List<UiSaleLine>, String>(
@@ -596,6 +707,40 @@ private val UiSaleLinesSaver = listSaver<List<UiSaleLine>, String>(
     }
 )
 
+private val UiSalePaymentsSaver = listSaver<List<UiSalePayment>, String>(
+    save = { payments ->
+        payments.map { payment ->
+            listOf(
+                payment.amount.toString(),
+                payment.paymentMethodCode.toString(),
+                Uri.encode(payment.paymentReference.orEmpty())
+            ).joinToString("::")
+        }
+    },
+    restore = { encoded ->
+        encoded.mapNotNull { raw ->
+            val parts = raw.split("::")
+            if (parts.size != 3) {
+                null
+            } else {
+                UiSalePayment(
+                    amount = parts[0].toDoubleOrNull() ?: 0.0,
+                    paymentMethodCode = parts[1].toIntOrNull() ?: PaymentMethodOption.Cash.code,
+                    paymentReference = Uri.decode(parts[2]).ifBlank { null }
+                )
+            }
+        }
+    }
+)
+
+private fun formatSaleTime(iso: String): String {
+    return runCatching {
+        val instant = Instant.parse(iso)
+        val local = instant.atZone(ZoneId.systemDefault())
+        local.format(DateTimeFormatter.ofPattern("HH:mm"))
+    }.getOrElse { "--:--" }
+}
+
 private fun extractReferenceText(text: String): String {
     val lines = text.lines().map { it.trim() }.filter { it.isNotBlank() }
     val candidate = lines.firstOrNull { it.length >= 4 } ?: ""
@@ -612,3 +757,5 @@ private fun parseCustomerDetails(text: String): Pair<String?, String?> {
 
     return nameLine to phone
 }
+
+private fun Double.toPercentString(): String = "%.1f%%".format(this * 100)

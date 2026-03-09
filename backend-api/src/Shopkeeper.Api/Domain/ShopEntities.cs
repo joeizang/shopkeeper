@@ -10,6 +10,7 @@ public sealed class Shop : IMutableTenantEntity
     public string Code { get; set; } = string.Empty;
     public bool VatEnabled { get; set; } = true;
     public decimal VatRate { get; set; } = 0.075m;
+    public decimal DefaultDiscountPercent { get; set; }
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
     public byte[] RowVersion { get; set; } = Array.Empty<byte>();
@@ -41,7 +42,7 @@ public sealed class ShopMembership : IMutableTenantEntity
     public Guid Id { get; set; } = Guid.NewGuid();
     public Guid ShopId { get; set; }
     public Guid UserAccountId { get; set; }
-    public MembershipRole Role { get; set; } = MembershipRole.Staff;
+    public MembershipRole Role { get; set; } = MembershipRole.Salesperson;
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;

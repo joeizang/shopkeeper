@@ -26,6 +26,9 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
     public DbSet<SalePayment> SalePayments => Set<SalePayment>();
     public DbSet<CreditAccount> CreditAccounts => Set<CreditAccount>();
     public DbSet<CreditRepayment> CreditRepayments => Set<CreditRepayment>();
+    public DbSet<Expense> Expenses => Set<Expense>();
+    public DbSet<ReportJob> ReportJobs => Set<ReportJob>();
+    public DbSet<ReportFile> ReportFiles => Set<ReportFile>();
     public DbSet<SyncChange> SyncChanges => Set<SyncChange>();
     public DbSet<DeviceCheckpoint> DeviceCheckpoints => Set<DeviceCheckpoint>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -120,6 +123,21 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
             .WithMany()
             .HasForeignKey(x => x.SalePaymentId);
 
+        modelBuilder.Entity<Expense>()
+            .HasIndex(x => new { x.TenantId, x.ExpenseDateUtc });
+
+        modelBuilder.Entity<ReportJob>()
+            .HasOne(x => x.ReportFile)
+            .WithMany()
+            .HasForeignKey(x => x.ReportFileId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<ReportJob>()
+            .HasIndex(x => new { x.TenantId, x.RequestedAtUtc });
+
+        modelBuilder.Entity<ReportFile>()
+            .HasIndex(x => new { x.TenantId, x.CreatedAtUtc });
+
         modelBuilder.Entity<RefreshToken>()
             .HasOne(x => x.UserAccount)
             .WithMany()
@@ -165,7 +183,7 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
             if (entry.State is EntityState.Added or EntityState.Modified)
             {
                 entry.Entity.UpdatedAtUtc = now;
-                entry.Entity.RowVersion = BitConverter.GetBytes(now.Ticks);
+                entry.Entity.RowVersion = Guid.NewGuid().ToByteArray();
             }
         }
     }

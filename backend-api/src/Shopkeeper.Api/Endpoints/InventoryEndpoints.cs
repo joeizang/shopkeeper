@@ -16,12 +16,13 @@ public static class InventoryEndpoints
     public static IEndpointRouteBuilder MapInventoryEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/api/v1/inventory")
-            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.StaffOrOwner });
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.OwnerOrManager });
 
         group.MapPost("/items", CreateItem);
         group.MapGet("/items", ListItems);
         group.MapGet("/items/{id:guid}", GetItem);
         group.MapPatch("/items/{id:guid}", UpdateItem);
+        group.MapDelete("/items/{id:guid}", DeleteItem);
         group.MapPost("/items/{id:guid}/photos", AddPhoto);
         group.MapPost("/stock-adjustments", CreateStockAdjustment);
 
@@ -77,7 +78,11 @@ public static class InventoryEndpoints
             PayloadJson = $"{{\"productName\":\"{item.ProductName}\"}}"
         });
 
+        // First save so EF runs ApplyMutableEntityUpdates and populates RowVersion,
+        // then add the SyncChange (which needs the final RowVersion), all inside one transaction.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
+
         db.SyncChanges.Add(new SyncChange
         {
             TenantId = tenantId.Value,
@@ -85,15 +90,18 @@ public static class InventoryEndpoints
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Create,
-            PayloadJson = JsonSerializer.Serialize(ToView(item)),
+            PayloadJson = SyncJson.Serialize(ToView(item)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
 
         return Results.Created($"/api/v1/inventory/items/{item.Id}", ToView(item));
     }
 
     private static async Task<IResult> ListItems(
+        [FromQuery] int page,
+        [FromQuery] int limit,
         ShopkeeperDbContext db,
         TenantContextAccessor tenant,
         HttpContext httpContext,
@@ -105,14 +113,34 @@ public static class InventoryEndpoints
             return Results.Unauthorized();
         }
 
-        var items = await db.InventoryItems
-            .Where(x => x.TenantId == tenantId.Value && !x.IsDeleted)
-            .Include(x => x.Photos)
+        var effectivePage = Math.Max(1, page == 0 ? 1 : page);
+        var effectiveLimit = Math.Clamp(limit == 0 ? 100 : limit, 1, 200);
+
+        var query = db.InventoryItems
+            .Where(x => x.TenantId == tenantId.Value && !x.IsDeleted);
+
+        var total = await query.CountAsync(ct);
+        var items = await query
             .OrderByDescending(x => x.CreatedAtUtc)
-            .Select(x => ToView(x))
+            .Skip((effectivePage - 1) * effectiveLimit)
+            .Take(effectiveLimit)
+            .Select(x => new InventoryItemView(
+                x.Id,
+                x.ProductName,
+                x.ModelNumber,
+                x.SerialNumber,
+                x.Quantity,
+                x.ExpiryDate,
+                x.CostPrice,
+                x.SellingPrice,
+                x.ItemType,
+                x.ConditionGrade,
+                x.ConditionNotes,
+                x.Photos.Select(p => p.PhotoUri).ToList(),
+                x.RowVersion.Length == 0 ? string.Empty : Convert.ToBase64String(x.RowVersion)))
             .ToListAsync(ct);
 
-        return Results.Ok(items);
+        return Results.Ok(new { total, page = effectivePage, limit = effectiveLimit, items });
     }
 
     private static async Task<IResult> GetItem(
@@ -173,6 +201,7 @@ public static class InventoryEndpoints
         if (request.ConditionGrade.HasValue) item.ConditionGrade = request.ConditionGrade;
         if (request.ConditionNotes is not null) item.ConditionNotes = request.ConditionNotes;
 
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
         await db.SaveChangesAsync(ct);
         await db.Entry(item).Collection(x => x.Photos).LoadAsync(ct);
 
@@ -183,7 +212,7 @@ public static class InventoryEndpoints
             Action = "inventory.update",
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
-            PayloadJson = JsonSerializer.Serialize(ToView(item))
+            PayloadJson = SyncJson.Serialize(ToView(item))
         });
         db.SyncChanges.Add(new SyncChange
         {
@@ -192,10 +221,11 @@ public static class InventoryEndpoints
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Update,
-            PayloadJson = JsonSerializer.Serialize(ToView(item)),
+            PayloadJson = SyncJson.Serialize(ToView(item)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
         await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
         return Results.Ok(ToView(item));
     }
 
@@ -251,13 +281,69 @@ public static class InventoryEndpoints
                 EntityName = nameof(InventoryItem),
                 EntityId = item.Id,
                 Operation = SyncOperation.Update,
-                PayloadJson = JsonSerializer.Serialize(ToView(item)),
+                PayloadJson = SyncJson.Serialize(ToView(item)),
                 ClientUpdatedAtUtc = DateTime.UtcNow
             });
             await db.SaveChangesAsync(ct);
         }
 
         return Results.Created($"/api/v1/inventory/items/{id}/photos/{photo.Id}", photo);
+    }
+
+    private static async Task<IResult> DeleteItem(
+        Guid id,
+        [FromQuery] string? rowVersionBase64,
+        ShopkeeperDbContext db,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue)
+        {
+            return Results.Unauthorized();
+        }
+
+        var item = await db.InventoryItems
+            .Include(x => x.Photos)
+            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
+        if (item is null || item.IsDeleted)
+        {
+            return Results.NotFound();
+        }
+
+        if (!string.IsNullOrWhiteSpace(rowVersionBase64) &&
+            item.RowVersion.Length > 0 &&
+            Convert.ToBase64String(item.RowVersion) != rowVersionBase64)
+        {
+            return Results.Conflict(new { message = "Conflict detected. Item has changed on server.", entityId = id });
+        }
+
+        item.IsDeleted = true;
+        await db.SaveChangesAsync(ct);
+
+        db.AuditLogs.Add(new AuditLog
+        {
+            TenantId = tenantId.Value,
+            UserAccountId = tenant.GetUserId(httpContext.User),
+            Action = "inventory.delete",
+            EntityName = nameof(InventoryItem),
+            EntityId = item.Id,
+            PayloadJson = SyncJson.Serialize(new { item.Id, item.ProductName, item.IsDeleted })
+        });
+        db.SyncChanges.Add(new SyncChange
+        {
+            TenantId = tenantId.Value,
+            DeviceId = ServerDeviceId,
+            EntityName = nameof(InventoryItem),
+            EntityId = item.Id,
+            Operation = SyncOperation.Delete,
+            PayloadJson = SyncJson.Serialize(new { id = item.Id }),
+            ClientUpdatedAtUtc = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync(ct);
+
+        return Results.NoContent();
     }
 
     private static async Task<IResult> CreateStockAdjustment(
@@ -315,7 +401,7 @@ public static class InventoryEndpoints
             EntityName = nameof(InventoryItem),
             EntityId = item.Id,
             Operation = SyncOperation.Update,
-            PayloadJson = JsonSerializer.Serialize(ToView(item)),
+            PayloadJson = SyncJson.Serialize(ToView(item)),
             ClientUpdatedAtUtc = DateTime.UtcNow
         });
         await db.SaveChangesAsync(ct);

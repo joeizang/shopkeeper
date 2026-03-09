@@ -3,7 +3,8 @@ namespace Shopkeeper.Api.Domain;
 public enum MembershipRole
 {
     Owner = 1,
-    Staff = 2
+    ShopManager = 2,
+    Salesperson = 3
 }
 
 public enum ItemConditionGrade

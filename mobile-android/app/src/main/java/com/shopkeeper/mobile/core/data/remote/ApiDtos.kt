@@ -46,6 +46,48 @@ data class AuthResponse(
     val role: String
 )
 
+data class ShopViewDto(
+    val id: String,
+    val name: String,
+    val code: String,
+    val vatEnabled: Boolean,
+    val vatRate: Double,
+    val defaultDiscountPercent: Double,
+    val role: String,
+    val rowVersionBase64: String
+)
+
+data class UpdateShopVatSettingsRequestDto(
+    val vatEnabled: Boolean,
+    val vatRate: Double,
+    val defaultDiscountPercent: Double,
+    val rowVersionBase64: String?
+)
+
+data class InviteStaffRequestDto(
+    val fullName: String,
+    val email: String?,
+    val phone: String?,
+    val temporaryPassword: String,
+    val role: String
+)
+
+data class UpdateStaffMembershipRequestDto(
+    val role: String,
+    val isActive: Boolean
+)
+
+data class StaffMembershipViewDto(
+    val staffId: String,
+    val userId: String,
+    val fullName: String,
+    val email: String?,
+    val phone: String?,
+    val role: String,
+    val isActive: Boolean,
+    val createdAtUtc: String
+)
+
 data class AccountProfileResponseDto(
     val userId: String,
     val fullName: String,
@@ -281,7 +323,8 @@ data class ProfitLossReportResponseDto(
     val cogs: Double,
     val grossProfit: Double,
     val expenses: Double,
-    val netProfitLoss: Double
+    val netProfitLoss: Double,
+    val expenseBreakdown: List<ExpenseCategorySummaryRowDto>
 )
 
 data class CreditorReportRowDto(
@@ -303,4 +346,66 @@ data class CreditorsReportResponseDto(
     val openCredits: Int,
     val totalOutstanding: Double,
     val credits: List<CreditorReportRowDto>
+)
+
+data class ExpenseCategorySummaryRowDto(
+    val category: String,
+    val amount: Double
+)
+
+data class ExpenseViewDto(
+    val id: String,
+    val title: String,
+    val category: String,
+    val amount: Double,
+    val expenseDateUtc: String,
+    val notes: String?,
+    val createdAtUtc: String,
+    val rowVersionBase64: String
+)
+
+data class CreateExpenseRequestDto(
+    val title: String,
+    val category: String,
+    val amount: Double,
+    val expenseDateUtc: String,
+    val notes: String?
+)
+
+data class UpdateExpenseRequestDto(
+    val title: String?,
+    val category: String?,
+    val amount: Double?,
+    val expenseDateUtc: String?,
+    val notes: String?,
+    val rowVersionBase64: String?
+)
+
+data class ReportJobViewDto(
+    val id: String,
+    val reportType: String,
+    val format: String,
+    val status: String,
+    val filterJson: String?,
+    val reportFileId: String?,
+    val requestedAtUtc: String,
+    val completedAtUtc: String?,
+    val failureReason: String?
+)
+
+data class QueueReportJobRequestDto(
+    val reportType: String,
+    val format: String,
+    val fromUtc: String?,
+    val toUtc: String?
+)
+
+data class ReportFileViewDto(
+    val id: String,
+    val reportType: String,
+    val format: String,
+    val fileName: String,
+    val contentType: String,
+    val byteLength: Long,
+    val createdAtUtc: String
 )

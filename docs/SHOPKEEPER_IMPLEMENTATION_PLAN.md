@@ -4,7 +4,7 @@
 Create a new greenfield repository at `/Users/josephizang/Projects/vibes/shopkeeper` for:
 - Android app (Kotlin + Compose, offline-first, camera OCR, PDF receipt sharing).
 - Backend API (.NET 10 Minimal API + EF Core 10 + SQLite).
-- Multi-tenant SaaS model (Owner + Staff roles, tenant isolation, credit sales, used-item inventory).
+- Multi-tenant SaaS model (Owner, ShopManager, Salesperson roles, tenant isolation, credit sales, used-item inventory).
 
 Primary completion criteria:
 - Inventory creation from camera OCR with mandatory review/edit before save.
@@ -22,6 +22,7 @@ Put this exact plan (all sections below) into that file as the source-of-truth i
 ## Repository Structure
 Create:
 - `shopkeeper/mobile-android/`
+- `shopkeeper/mobile-ios/`
 - `shopkeeper/backend-api/src/Shopkeeper.Api/`
 - `shopkeeper/backend-api/tests/Shopkeeper.Api.Tests/`
 - `shopkeeper/docs/`
@@ -35,8 +36,10 @@ Auth and tenancy:
 - `POST /auth/refresh`
 - `POST /shops`
 - `GET /shops/me`
+- `GET /shops/{shopId}/staff`
 - `POST /shops/{shopId}/staff/invite`
 - `POST /shops/{shopId}/staff/{staffId}/activate`
+- `PATCH /shops/{shopId}/staff/{staffId}`
 
 Inventory:
 - `POST /inventory/items`
@@ -86,8 +89,13 @@ Cross-cutting fields on mutable business entities:
 3. Add JWT auth (access + refresh token flow).
 4. Add authorization policies:
 - Owner: full shop and staff management.
-- Staff: inventory, sales, receipts, repayments.
-5. Implement tenant isolation:
+- ShopManager: inventory, sales, receipts, repayments, non-financial admin views, non-P&L reporting.
+- Salesperson: sales, receipts, and credit repayment only.
+5. Add role-capability enforcement:
+- Owner-only: VAT, discounts, expenses, P&L, staff management, account-wide admin actions.
+- ShopManager: inventory mutations, sales, credits, conflict handling, inventory/sales/creditors reporting.
+- Salesperson: sales creation, payments, receipts, credit repayments.
+6. Implement tenant isolation:
 - Resolve tenant from claims.
 - Apply tenant filter in every repository/query.
 6. Implement inventory endpoints with used-item fields:
@@ -104,14 +112,96 @@ Cross-cutting fields on mutable business entities:
 - Detect row-version conflicts and return conflict payload.
 11. Add audit logs for stock changes, sales, voids, and repayments.
 12. Add standardized ProblemDetails responses and validation filters.
-13. Implement reporting endpoints:
+13. Implement role-aware staff management endpoints:
+- Invite staff with explicit role assignment.
+- List current staff memberships.
+- Update role or active status for a membership.
+14. Implement reporting endpoints:
 - Inventory, sales, P&L, and creditors previews.
 - Date-range filters for sales, P&L, and creditors.
 - Owner-only restriction for P&L.
-14. Implement export pipeline:
+15. Implement export pipeline:
 - Format `pdf` for printable reports.
 - Format `spreadsheet` for spreadsheet-compatible CSV download.
 - Consistent totals between preview and exports.
+16. Implement backend caching strategy with FusionCache and HTTP validators:
+- Use `ZiggyCreatures.FusionCache` for application/data caching on tenant-scoped read endpoints.
+- Prefer cache-aside service-layer caching over endpoint-only output caching because most API reads are authenticated and tenant-aware.
+- Add per-feature cache keys that include `TenantId`, route identifiers, role-sensitive query parameters, and date filters where relevant.
+- Use short TTLs for operational reads, medium TTLs for reporting summaries, and targeted invalidation after mutations.
+- Add cache tags and key-prefix conventions for shop-wide invalidation after writes.
+- Add fail-safe and stampede protection on report and list endpoints that are expensive to recompute.
+17. Implement ETag/conditional request support:
+- Add `ETag` headers on cacheable `GET` endpoints.
+- Support `If-None-Match` for `304 Not Modified` responses on list/detail/report endpoints.
+- Standardize ETag derivation from stable resource version inputs such as `RowVersion`, `UpdatedAtUtc`, aggregate max-update timestamps, and filter scopes.
+- Keep optimistic concurrency for writes with existing `RowVersion` semantics, but expose HTTP `If-Match` as a later-compatible extension point.
+18. Add cache invalidation rules:
+- Shop settings writes invalidate shop/profile/dashboard/report summary caches for that tenant.
+- Inventory writes invalidate inventory list/detail, dashboard, sales composer supporting reads, inventory report, and sync pull projections.
+- Sales and repayment writes invalidate dashboard, credits, sale detail/receipt, sales report, creditors report, and P&L caches.
+- Expense writes invalidate expenses list, P&L, report summaries, and export artifacts when applicable.
+19. Add caching observability:
+- Emit cache hit/miss/fail-safe metrics and logs.
+- Track `304` rates, cache hit ratio by endpoint family, invalidation counts, and report recomputation duration.
+- Expose enough telemetry to tune TTLs per endpoint after production usage data arrives.
+20. Execute caching rollout in controlled stages:
+- Stage 1: Add FusionCache package, options, cache-key helpers, ETag helper, and cache invalidation service.
+- Stage 2: Cache bootstrap endpoints used heavily by mobile startup:
+  - `GET /shops/me`
+  - `GET /account/me`
+  - `GET /account/linked-identities`
+- Stage 3: Cache operational inventory and credits reads:
+  - `GET /inventory/items`
+  - `GET /inventory/items/{id}`
+  - `GET /credits`
+  - `GET /credits/{saleId}`
+- Stage 4: Cache reporting preview and artifact metadata reads:
+  - `GET /reports/inventory`
+  - `GET /reports/sales`
+  - `GET /reports/profit-loss`
+  - `GET /reports/creditors`
+  - `GET /reports/jobs`
+  - `GET /reports/jobs/{id}`
+  - `GET /reports/files`
+- Stage 5: Add `ETag` and `If-None-Match` support to all Stage 2-4 `GET` endpoints.
+- Stage 6: Add strong ETags and private immutable caching semantics to `GET /reports/files/{id}/download`.
+- Stage 7: Update Android and iOS clients to store ETags per resource key, send `If-None-Match`, and reuse existing local data on `304`.
+21. Introduce cache-version sources for collection endpoints:
+- Add tenant-scoped resource version stamps for:
+  - inventory
+  - sales
+  - credits
+  - expenses
+  - reports
+  - staff
+  - shop settings / bootstrap data
+- Use these version stamps as the primary input for list/report ETags and cache invalidation.
+- Continue using entity `RowVersion` for single-resource detail ETags where applicable.
+22. Define initial TTL policy:
+- Bootstrap/profile reads: 2-5 minutes.
+- Inventory and credits operational reads: 10-30 seconds.
+- Report previews: 30-120 seconds depending on computational cost.
+- Report jobs polling reads: 2-5 seconds.
+- Report files metadata: 10-30 seconds.
+- Binary report downloads: long-lived private immutable caching with strong ETags.
+23. Define invalidation matrix:
+- Shop settings changes invalidate bootstrap/profile/shop/report summary caches.
+- Staff changes invalidate staff list and bootstrap caches.
+- Inventory changes invalidate inventory detail/list, supporting sales reads, dashboard aggregates, report previews, and dependent report artifacts.
+- Sales creation/payment/void invalidates sales detail/receipt, credits, reports, dashboard aggregates, and related ETags.
+- Credit repayments invalidate credits, affected sale detail/receipt, reports, and dashboard aggregates.
+- Expense changes invalidate expenses and profit/loss related caches.
+24. Add implementation safeguards:
+- Cache keys must always include `TenantId` and any filter dimensions; user-specific reads must also include `UserId`.
+- Do not cache auth endpoints, write endpoints, or sync endpoints.
+- Do not use shared HTTP response caching for authenticated tenant data.
+- Prefer weak ETags for JSON projections and strong ETags only for immutable file downloads.
+25. Add delivery tests for caching:
+- Verify `304 Not Modified` on repeated `GET` requests with matching `If-None-Match`.
+- Verify stale cache invalidation after inventory, sales, credit, expense, staff, and shop-settings mutations.
+- Verify no cross-tenant cache leakage under parallel requests.
+- Verify mobile clients preserve local data correctly when backend returns `304`.
 
 ## Android Implementation Plan (Kotlin + Compose)
 1. Create app modules/packages:
@@ -144,6 +234,50 @@ Cross-cutting fields on mutable business entities:
 - Date filters with date pickers.
 - Export actions for PDF and spreadsheet.
 - Download and share generated files through Android share sheet.
+11. Add role-aware frontend behavior:
+- Owner sees pricing/settings and team-management tools in Profile.
+- ShopManager sees inventory, sales, credits, sync, and non-P&L reports.
+- Salesperson sees dashboard, sales, credits, sync, and personal profile only.
+- Navigation tabs and action buttons are filtered by role capabilities.
+
+## iOS Implementation Plan (SwiftUI)
+1. Create a new iPhone app under `mobile-ios/` using SwiftUI and Swift 6 toolchain compatibility.
+2. Target minimum iOS version `16.0` to cover iPhone OS versions from four years ago.
+3. Mirror the core app shell and role model from Android:
+- `Owner`, `ShopManager`, `Salesperson`
+- role-aware tabs and feature visibility
+4. Build shared app foundation:
+- `AppConfig`
+- `APIClient`
+- `SessionStore`
+- typed network contracts matching backend JSON
+5. Implement authentication flow:
+- login
+- owner registration
+- secure session persistence
+6. Implement initial iPhone feature set:
+- dashboard summary
+- inventory list
+- sales summary screen
+- credits list
+- reports summary screen
+- profile/account screen
+7. Implement owner admin controls in iOS profile:
+- VAT and default discount settings
+- team management with invite, role update, activation state update
+8. Add iOS networking rules for local backend development:
+- local HTTP access through App Transport Security exceptions
+- simulator default base URL pointing to `http://127.0.0.1:5057`
+9. Add simulator delivery path:
+- build with `xcodebuild`
+- boot an iPhone simulator
+- install and launch app with `simctl`
+10. Expand toward parity after the shell is stable:
+- sales creation workflow
+- inventory create/edit workflow
+- receipts/share flow
+- offline caching and sync queue
+- camera OCR and scan flows
 
 ## Data Model and Rules
 - Multi-tenant single SQLite DB in v1; all business rows include `TenantId`.
@@ -157,6 +291,10 @@ Cross-cutting fields on mutable business entities:
 - Used items support grade, notes, and photos.
 - Tax handling:
 - Shop-level `VatEnabled` and `VatRate`.
+- Role model:
+- `Owner`: full admin and financial controls.
+- `ShopManager`: operational management without owner-only financial/admin controls.
+- `Salesperson`: transaction execution and repayment collection only.
 - Reporting metrics:
 - Inventory value = `SUM(quantity * costPrice)`.
 - Revenue = sum of non-void sales in period.
@@ -173,16 +311,30 @@ Cross-cutting fields on mutable business entities:
 5. Phase 5: Offline sync + conflict resolution.
 6. Phase 6: Hardening, QA, observability, deployment packaging.
 7. Phase 7: Reporting module (preview + export + mobile share flow).
+8. Phase 8: iOS app shell, role-aware navigation, and backend integration.
+9. Phase 9: iOS parity for sales, inventory, receipts, OCR, and offline sync.
+10. Phase 10: Backend read caching, ETags, invalidation, and cache telemetry hardening.
+11. Phase 11: Mobile conditional GET support and post-rollout cache tuning.
 
 ## Test Cases and Scenarios
 Backend:
 - Tenant isolation blocks cross-shop access.
-- Owner/staff policy checks.
+- Owner/shop-manager/salesperson policy checks.
 - Sale totals, VAT, and payment consistency.
 - Credit partial repayments and close-out logic.
 - Conflict response on stale `RowVersion`.
 - Reporting totals are consistent between JSON preview and exported file.
 - P&L endpoint rejects non-owner users.
+- Salesperson is denied inventory/report/staff-management endpoints.
+- ShopManager is denied owner-only shop settings and expense endpoints.
+- Cached endpoints return `304 Not Modified` when `If-None-Match` matches current representation.
+- Cache invalidation occurs after inventory, sales, credit, expense, and shop-settings mutations.
+- Tenant-scoped cache keys never leak data across shops or roles.
+- Reporting caches respect date-range filters and role restrictions.
+- FusionCache fail-safe does not serve cross-tenant or cross-filter data.
+- Single-resource detail ETags are derived from stable entity version inputs.
+- Collection/report ETags are derived from tenant-scoped resource version stamps plus filter scope.
+- Report file downloads return strong ETags and do not regenerate content unnecessarily when unchanged.
 
 Android:
 - OCR extraction requires manual confirmation before save.
@@ -192,6 +344,14 @@ Android:
 - Credit outstanding updates correctly after each repayment.
 - Reports screen loads each report type and applies date filters.
 - Exported PDF/spreadsheet files download and share correctly.
+- Role-based navigation hides unauthorized tabs.
+- Owner profile exposes staff management; non-owner profiles do not.
+- Android stores ETags for high-value `GET` resources and sends `If-None-Match` on revalidation.
+- Android correctly handles `304` by reusing current local state without treating the call as an error.
+
+iOS:
+- iOS stores ETags for high-value `GET` resources and sends `If-None-Match` on revalidation.
+- iOS correctly handles `304` by reusing current local state without treating the call as an error.
 
 End-to-end:
 - Owner self-signup, create shop, add staff, sell used item, issue receipt.

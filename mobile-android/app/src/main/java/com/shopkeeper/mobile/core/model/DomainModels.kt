@@ -3,7 +3,7 @@ package com.shopkeeper.mobile.core.model
 import java.time.Instant
 import java.time.LocalDate
 
-enum class MembershipRole { OWNER, STAFF }
+enum class MembershipRole { OWNER, SHOP_MANAGER, SALESPERSON }
 enum class ItemType { NEW, USED }
 enum class ItemConditionGrade { A, B, C }
 enum class PaymentMethod { CASH, BANK_TRANSFER, POS }
