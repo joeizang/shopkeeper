@@ -1,5 +1,6 @@
 package com.shopkeeper.mobile.ui
 
+import android.content.Context
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,20 +14,28 @@ import androidx.compose.material.icons.outlined.PointOfSale
 import androidx.compose.material.icons.outlined.QueryStats
 import androidx.compose.material.icons.outlined.SyncProblem
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.Surface
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -34,53 +43,80 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.shopkeeper.mobile.credits.CreditScreen
+import com.shopkeeper.mobile.ReportsScreen
+import com.shopkeeper.mobile.auth.AuthScreen
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
+import com.shopkeeper.mobile.credits.CreditScreen
 import com.shopkeeper.mobile.dashboard.DashboardScreen
 import com.shopkeeper.mobile.inventory.InventoryScreen
+import com.shopkeeper.mobile.onboarding.OnboardingScreen
 import com.shopkeeper.mobile.profile.ProfileScreen
-import com.shopkeeper.mobile.ReportsScreen
 import com.shopkeeper.mobile.sales.SalesScreen
 import com.shopkeeper.mobile.sync.ConflictResolutionScreen
 import com.shopkeeper.mobile.ui.components.ShopkeeperBackground
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.LocalContentColor
-import androidx.compose.ui.platform.LocalContext
+import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 
 @Composable
-fun ShopkeeperApp() {
+fun ShopkeeperApp(skipOnboardingForTests: Boolean = false) {
     val context = LocalContext.current
-    val gateway = androidx.compose.runtime.remember(context) { ShopkeeperDataGateway.get(context) }
-    val capabilities = gateway.sessionCapabilities()
-    val navController = rememberNavController()
-    val tabs = buildList {
-        add(NavTab("dashboard", "Home", Icons.Outlined.Dashboard))
-        if (capabilities.canManageInventory) add(NavTab("inventory", "Stock", Icons.Outlined.Inventory))
-        if (capabilities.canManageSales) add(NavTab("sales", "Sales", Icons.Outlined.PointOfSale))
-        if (capabilities.canViewReports) add(NavTab("reports", "Reports", Icons.Outlined.QueryStats))
-        if (capabilities.canManageSales) add(NavTab("credits", "Credit", Icons.Outlined.CreditCard))
-        add(NavTab("conflicts", "Sync", Icons.Outlined.SyncProblem))
+    val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
+    val isAuthenticated by gateway.authState().collectAsState(initial = gateway.isAuthenticated())
+    val onboardingCompletedInitial = remember(context) {
+        val standardPrefs = runCatching {
+            context.getSharedPreferences("shopkeeper_prefs", Context.MODE_PRIVATE)
+                .getBoolean("onboarding_completed", false)
+        }.getOrDefault(false)
+        val deviceProtectedPrefs = runCatching {
+            context.createDeviceProtectedStorageContext()
+                .getSharedPreferences("shopkeeper_prefs", Context.MODE_PRIVATE)
+                .getBoolean("onboarding_completed", false)
+        }.getOrDefault(false)
+        standardPrefs || deviceProtectedPrefs
     }
-
-    fun navigateToTab(route: String) {
-        val currentRoute = navController.currentBackStackEntry?.destination?.route
-        if (currentRoute == route) {
-            return
-        }
-
-        val restoredExistingDestination = navController.popBackStack(route, inclusive = false)
-        if (!restoredExistingDestination) {
-            navController.navigate(route) {
-                popUpTo(navController.graph.findStartDestination().id) {
-                    saveState = true
-                }
-                launchSingleTop = true
-                restoreState = true
-            }
-        }
+    var onboardingCompleted by remember {
+        mutableStateOf(onboardingCompletedInitial)
     }
 
     ShopkeeperBackground(modifier = Modifier.fillMaxSize()) {
+        if (!skipOnboardingForTests && !onboardingCompleted) {
+            OnboardingScreen(onComplete = { onboardingCompleted = true })
+            return@ShopkeeperBackground
+        }
+
+        if (!isAuthenticated) {
+            AuthScreen()
+            return@ShopkeeperBackground
+        }
+
+        val capabilities = gateway.sessionCapabilities()
+        val navController = rememberNavController()
+        val tabs = buildList {
+            add(NavTab("dashboard", "Home", Icons.Outlined.Dashboard))
+            if (capabilities.canManageInventory) add(NavTab("inventory", "Stock", Icons.Outlined.Inventory))
+            if (capabilities.canManageSales) add(NavTab("sales", "Sales", Icons.Outlined.PointOfSale))
+            if (capabilities.canViewReports) add(NavTab("reports", "Reports", Icons.Outlined.QueryStats))
+            if (capabilities.canManageSales) add(NavTab("credits", "Credit", Icons.Outlined.CreditCard))
+            add(NavTab("conflicts", "Sync", Icons.Outlined.SyncProblem))
+        }
+
+        fun navigateToTab(route: String) {
+            val currentRoute = navController.currentBackStackEntry?.destination?.route
+            if (currentRoute == route) {
+                return
+            }
+
+            val restoredExistingDestination = navController.popBackStack(route, inclusive = false)
+            if (!restoredExistingDestination) {
+                navController.navigate(route) {
+                    popUpTo(navController.graph.findStartDestination().id) {
+                        saveState = true
+                    }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
+        }
+
         Scaffold(
             containerColor = Color.Transparent,
             contentColor = MaterialTheme.colorScheme.onBackground,
@@ -111,6 +147,14 @@ fun ShopkeeperApp() {
                             tabs.forEach { tab ->
                                 val selected = currentDestination?.hierarchy?.any { it.route == tab.route } == true
                                 NavigationBarItem(
+                                    modifier = Modifier.testTag(when (tab.route) {
+                                        "dashboard" -> ShopkeeperTestTags.NAV_HOME
+                                        "inventory" -> ShopkeeperTestTags.NAV_STOCK
+                                        "sales" -> ShopkeeperTestTags.NAV_SALES
+                                        "reports" -> ShopkeeperTestTags.NAV_REPORTS
+                                        "credits" -> ShopkeeperTestTags.NAV_CREDIT
+                                        else -> ShopkeeperTestTags.NAV_SYNC
+                                    }),
                                     selected = selected,
                                     onClick = { navigateToTab(tab.route) },
                                     label = {
@@ -158,7 +202,7 @@ fun ShopkeeperApp() {
                         if (capabilities.canViewReports) {
                             composable("reports") { ReportsScreen() }
                         }
-                        composable("profile") { ProfileScreen() }
+                        composable("profile") { ProfileScreen(onLogout = { gateway.logout() }) }
                         if (capabilities.canManageSales) {
                             composable("credits") { CreditScreen() }
                         }

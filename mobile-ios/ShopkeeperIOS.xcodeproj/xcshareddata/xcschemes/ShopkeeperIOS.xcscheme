@@ -15,9 +15,23 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "001000000000000000000030"
+               BlueprintIdentifier = "A10000000000000000000030"
                BuildableName = "ShopkeeperIOS.app"
                BlueprintName = "ShopkeeperIOS"
+               ReferencedContainer = "container:ShopkeeperIOS.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+               <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B10000000000000000000031"
+               BuildableName = "ShopkeeperIOSUITests.xctest"
+               BlueprintName = "ShopkeeperIOSUITests"
                ReferencedContainer = "container:ShopkeeperIOS.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -29,6 +43,16 @@
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
       shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
+         <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "B10000000000000000000031"
+               BuildableName = "ShopkeeperIOSUITests.xctest"
+               BlueprintName = "ShopkeeperIOSUITests"
+               ReferencedContainer = "container:ShopkeeperIOS.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
@@ -45,7 +69,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "001000000000000000000030"
+            BlueprintIdentifier = "A10000000000000000000030"
             BuildableName = "ShopkeeperIOS.app"
             BlueprintName = "ShopkeeperIOS"
             ReferencedContainer = "container:ShopkeeperIOS.xcodeproj">
@@ -62,7 +86,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "001000000000000000000030"
+            BlueprintIdentifier = "A10000000000000000000030"
             BuildableName = "ShopkeeperIOS.app"
             BlueprintName = "ShopkeeperIOS"
             ReferencedContainer = "container:ShopkeeperIOS.xcodeproj">

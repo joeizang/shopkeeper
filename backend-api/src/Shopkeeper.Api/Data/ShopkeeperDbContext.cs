@@ -1,13 +1,55 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NodaTime;
+using NodaTime.Text;
 using Shopkeeper.Api.Domain;
 
 namespace Shopkeeper.Api.Data;
 
 public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
 {
+    private sealed class InstantToDateTimeValueConverter : ValueConverter<Instant, DateTime>
+    {
+        public InstantToDateTimeValueConverter()
+            : base(
+                value => value.ToDateTimeUtc(),
+                value => Instant.FromDateTimeUtc(DateTime.SpecifyKind(value, DateTimeKind.Utc)))
+        {
+        }
+    }
+
+    private sealed class NullableInstantToDateTimeValueConverter : ValueConverter<Instant?, DateTime?>
+    {
+        public NullableInstantToDateTimeValueConverter()
+            : base(
+                value => value.HasValue ? value.Value.ToDateTimeUtc() : null,
+                value => value.HasValue ? Instant.FromDateTimeUtc(DateTime.SpecifyKind(value.Value, DateTimeKind.Utc)) : null)
+        {
+        }
+    }
+
+    private sealed class LocalDateToStringValueConverter : ValueConverter<LocalDate, string>
+    {
+        public LocalDateToStringValueConverter()
+            : base(
+                value => LocalDatePattern.Iso.Format(value),
+                value => LocalDatePattern.Iso.Parse(value).Value)
+        {
+        }
+    }
+
+    private sealed class NullableLocalDateToStringValueConverter : ValueConverter<LocalDate?, string?>
+    {
+        public NullableLocalDateToStringValueConverter()
+            : base(
+                value => value.HasValue ? LocalDatePattern.Iso.Format(value.Value) : null,
+                value => string.IsNullOrWhiteSpace(value) ? null : LocalDatePattern.Iso.Parse(value).Value)
+        {
+        }
+    }
+
     public ShopkeeperDbContext(DbContextOptions<ShopkeeperDbContext> options)
         : base(options)
     {
@@ -35,6 +77,14 @@ public sealed class ShopkeeperDbContext : IdentityUserContext<UserAccount, Guid>
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<IdempotencyRecord> IdempotencyRecords => Set<IdempotencyRecord>();
     public DbSet<TenantSaleCounter> TenantSaleCounters => Set<TenantSaleCounter>();
+
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        configurationBuilder.Properties<Instant>().HaveConversion<InstantToDateTimeValueConverter>();
+        configurationBuilder.Properties<Instant?>().HaveConversion<NullableInstantToDateTimeValueConverter>();
+        configurationBuilder.Properties<LocalDate>().HaveConversion<LocalDateToStringValueConverter>();
+        configurationBuilder.Properties<LocalDate?>().HaveConversion<NullableLocalDateToStringValueConverter>();
+    }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

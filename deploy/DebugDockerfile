@@ -1,0 +1,5 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0
+WORKDIR /workspace
+COPY backend-api/ ./backend-api/
+WORKDIR /workspace/backend-api/src/Shopkeeper.Api
+RUN dotnet build Shopkeeper.Api.csproj -c Release

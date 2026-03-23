@@ -21,14 +21,28 @@ using Shopkeeper.Api.Infrastructure;
 using Shopkeeper.Api.Services;
 using ZiggyCreatures.Caching.Fusion;
 
-DotEnv.Load(options: new DotEnvOptions(envFilePaths: ["./.env", "./.env.local"]));
-var envs = DotEnv.Read();
-
+DotEnv.Load(options: new DotEnvOptions(envFilePaths: ["./.env", "./.env.local"], overwriteExistingVars: false));
 var builder = WebApplication.CreateBuilder(args);
-// builder.Configuration.AddEnvironmentVariables();
+
+var serverOptions = builder.Configuration.GetSection(ServerOptions.SectionName).Get<ServerOptions>()
+    ?? new ServerOptions();
+
+var listenIpAddress = serverOptions.ListenHost switch
+{
+    "0.0.0.0" => IPAddress.Any,
+    "::" => IPAddress.IPv6Any,
+    "localhost" => IPAddress.Loopback,
+    _ => IPAddress.Parse(serverOptions.ListenHost)
+};
 
 builder.WebHost.ConfigureKestrel(kestrel =>
-    kestrel.Limits.MaxRequestBodySize = 2 * 1024 * 1024);
+{
+    kestrel.Limits.MaxRequestBodySize = 2 * 1024 * 1024;
+    kestrel.Listen(listenIpAddress, serverOptions.ListenPort, listenOptions =>
+    {
+        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
+    });
+});
 
 var httpsRedirectionEnabled = builder.Configuration.GetValue<bool?>("AppHttpsRedirectionEnabled")
     ?? !builder.Environment.IsDevelopment();
@@ -80,13 +94,37 @@ builder.Services.AddOptions<GoogleAuthOptions>()
     .Validate(o => o.AllowedAudiences.Length == 0 || o.AllowedAudiences.All(a => a.Length > 10), "GoogleAllowedAudiences contains an entry that appears invalid.")
     .ValidateOnStart();
 
-var connectionString = envs["DbConnectionString"]
-    ?? "Host=192.168.0.5;Port=5432;Database=shopkeeper;Username=postgres;Password=postgres-2026";
+builder.Services.AddOptions<ServerOptions>()
+    .Bind(builder.Configuration.GetSection(ServerOptions.SectionName))
+    .Validate(o => !string.IsNullOrWhiteSpace(o.ListenHost), "Server:ListenHost is required.")
+    .Validate(o => o.ListenPort is > 0 and <= 65535, "Server:ListenPort must be between 1 and 65535.")
+    .Validate(o => o.TrustedProxies.All(p => IPAddress.TryParse(p, out _)), "Server:TrustedProxies contains an invalid IP address.")
+    .Validate(o => o.TrustAllForwardedHeaders || o.TrustedProxies.Length > 0 || o.ListenHost == "127.0.0.1" || o.ListenHost == "localhost",
+        "Configure Server:TrustAllForwardedHeaders or Server:TrustedProxies when the API sits behind a non-loopback reverse proxy.")
+    .ValidateOnStart();
 
-var test = connectionString;
+builder.Services.AddOptions<E2ETestOptions>()
+    .Bind(builder.Configuration.GetSection(E2ETestOptions.SectionName))
+    .Validate(o => !builder.Environment.IsEnvironment("E2E") || !string.IsNullOrWhiteSpace(o.AdminToken),
+        "E2E:AdminToken must be configured when ASPNETCORE_ENVIRONMENT=E2E.")
+    .ValidateOnStart();
 
-builder.Services.AddDbContext<ShopkeeperDbContext>(options =>
-    options.UseNpgsql(connectionString, o => o.UseNodaTime()));
+builder.Services.AddDbContext<ShopkeeperDbContext>((serviceProvider, options) =>
+{
+    var configuration = serviceProvider.GetRequiredService<IConfiguration>();
+    var environment = serviceProvider.GetRequiredService<IHostEnvironment>();
+    var connectionString = configuration["DbConnectionString"]
+        ?? configuration.GetConnectionString("Default")
+        ?? throw new InvalidOperationException("DbConnectionString must be configured.");
+
+    if (environment.IsEnvironment("Testing") && connectionString.Contains("Data Source=", StringComparison.OrdinalIgnoreCase))
+    {
+        options.UseSqlite(connectionString);
+        return;
+    }
+
+    options.UseNpgsql(connectionString, o => o.UseNodaTime());
+});
 
 builder.Services
     .AddIdentityCore<UserAccount>(options =>
@@ -110,13 +148,25 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedHost;
 
-    // Restrict to only trust forwarded headers from
-    // the local Caddy instance (loopback). This prevents
-    // header spoofing from external clients.
-    options.KnownIPNetworks?.Clear();
+    options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
-    options.KnownProxies.Add(IPAddress.Loopback);      // 127.0.0.1
-    options.KnownProxies.Add(IPAddress.IPv6Loopback);  // ::1
+
+    if (serverOptions.TrustAllForwardedHeaders)
+    {
+        return;
+    }
+
+    if (serverOptions.TrustedProxies.Length > 0)
+    {
+        foreach (var proxy in serverOptions.TrustedProxies)
+        {
+            options.KnownProxies.Add(IPAddress.Parse(proxy));
+        }
+        return;
+    }
+
+    options.KnownProxies.Add(IPAddress.Loopback);
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);
 });
 
 builder.Services.AddScoped<AuthTokenService>();
@@ -132,6 +182,7 @@ builder.Services.AddScoped<ReportingService>();
 builder.Services.AddScoped<ReportingReadService>();
 builder.Services.AddScoped<MagicLinkService>();
 builder.Services.AddScoped<IdempotencyService>();
+builder.Services.AddScoped<E2ETestSeeder>();
 builder.Services.AddScoped<IGoogleTokenValidator, GoogleTokenValidator>();
 builder.Services.AddSingleton<ReportDocumentRenderer>();
 builder.Services.AddSingleton<ReportJobChannel>();
@@ -253,19 +304,6 @@ builder.Services.AddCors(options =>
     });
 });
 
-// ── Enable HTTP/2 (and optionally HTTP/3) on Kestrel ──
-builder.WebHost.ConfigureKestrel(options =>
-{
-    // Listen on loopback only — Caddy is the public face.
-    // Never expose Kestrel directly on 0.0.0.0 in production.
-    options.Listen(IPAddress.Loopback, 5000, listenOptions =>
-    {
-        // h2c = HTTP/2 cleartext (no TLS on this hop,
-        // Caddy handles TLS termination)
-        listenOptions.Protocols = HttpProtocols.Http1AndHttp2;
-    });
-});
-
 var app = builder.Build();
 
 // ForwardedHeaders MUST be the first middleware —
@@ -382,6 +420,10 @@ app.MapCreditEndpoints();
 app.MapExpensesEndpoints();
 app.MapSyncEndpoints();
 app.MapReportsEndpoints();
+if (app.Environment.IsEnvironment("E2E"))
+{
+    app.MapE2ETestEndpoints();
+}
 
 app.Run();
 

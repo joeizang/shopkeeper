@@ -18,6 +18,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.ExpenseInput
 import com.shopkeeper.mobile.core.data.ExpenseRecord
@@ -38,6 +39,7 @@ import com.shopkeeper.mobile.ui.components.SectionTitle
 import com.shopkeeper.mobile.ui.components.SelectionPill
 import com.shopkeeper.mobile.ui.components.SoftButton
 import com.shopkeeper.mobile.ui.components.StatusBanner
+import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -354,12 +356,12 @@ fun ReportsScreen() {
             BrickButton(
                 text = if (isLoading) "Loading..." else "Load Report",
                 onClick = { if (!isLoading) loadPreview() },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.REPORTS_LOAD)
             )
             SoftButton(
                 text = "Refresh History",
                 onClick = { if (!isLoading) refreshHistory() },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.REPORTS_QUEUE_PDF)
             )
         }
 
@@ -367,7 +369,7 @@ fun ReportsScreen() {
             SoftButton(
                 text = "Queue PDF",
                 onClick = { if (!isLoading) queueExport(ReportExportFormat.Pdf) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.REPORTS_QUEUE_SPREADSHEET)
             )
             SoftButton(
                 text = "Queue Spreadsheet",

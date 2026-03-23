@@ -1,0 +1,15 @@
+{
+    auto_https off
+}
+
+:80 {
+    encode zstd gzip
+
+    @shopkeeper path /api/shopkeeper /api/shopkeeper/*
+    handle @shopkeeper {
+        uri strip_prefix /api/shopkeeper
+        reverse_proxy api:5000
+    }
+
+    respond "API route not found" 404
+}

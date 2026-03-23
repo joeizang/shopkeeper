@@ -1,3 +1,4 @@
+using dotenv.net;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Design;
 
@@ -7,9 +8,11 @@ public sealed class ShopkeeperDbContextFactory : IDesignTimeDbContextFactory<Sho
 {
     public ShopkeeperDbContext CreateDbContext(string[] args)
     {
-        // Reads CONNECTIONSTRINGS__DEFAULT from environment, or falls back to a local dev default.
-        var connectionString = Environment.GetEnvironmentVariable("CONNECTIONSTRINGS__DEFAULT")
-            ?? "Host=192.168.0.5;Port=5432;Database=shopkeeper;Username=postgres;Password=postgres";
+        DotEnv.Load(options: new DotEnvOptions(envFilePaths: ["./.env", "./.env.local"], ignoreExceptions: true, overwriteExistingVars: false));
+
+        var connectionString = Environment.GetEnvironmentVariable("DbConnectionString")
+            ?? Environment.GetEnvironmentVariable("CONNECTIONSTRINGS__DEFAULT")
+            ?? throw new InvalidOperationException("DbConnectionString must be configured for design-time operations.");
 
         var optionsBuilder = new DbContextOptionsBuilder<ShopkeeperDbContext>();
         optionsBuilder.UseNpgsql(connectionString, o => o.UseNodaTime());

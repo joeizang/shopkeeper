@@ -6,6 +6,8 @@
 **/obj/
 backend-api/**/bin/
 backend-api/**/obj/
+backend-api/src/Shopkeeper.Api/bin/
+backend-api/src/Shopkeeper.Api/obj/
 *.user
 *.suo
 

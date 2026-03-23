@@ -1,11 +1,5 @@
 package com.shopkeeper.mobile.inventory
 
-import android.Manifest
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,11 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.shopkeeper.mobile.core.data.NewInventoryInput
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.ui.components.AccentCard
@@ -47,10 +38,8 @@ import com.shopkeeper.mobile.ui.components.ScreenHeader
 import com.shopkeeper.mobile.ui.components.SectionTitle
 import com.shopkeeper.mobile.ui.components.SoftButton
 import com.shopkeeper.mobile.ui.components.StatusBanner
+import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import kotlinx.coroutines.launch
-import java.io.File
-import java.io.FileOutputStream
-import java.time.Instant
 
 @Composable
 fun InventoryScreen() {
@@ -76,55 +65,8 @@ fun InventoryScreen() {
     var isUsed by rememberSaveable { mutableStateOf(false) }
     var capturedPhotoUris by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var status by rememberSaveable { mutableStateOf("") }
-    var pendingCameraAction by remember { mutableStateOf(CameraAction.ScanText) }
-
-    val recognizer = remember { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
-
-    val scanLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap: Bitmap? ->
-        if (bitmap != null) {
-            val image = InputImage.fromBitmap(bitmap, 0)
-            recognizer.process(image)
-                .addOnSuccessListener { result ->
-                    val text = result.text
-                    extractedSerial = findCandidate(text, "serial")
-                    extractedModel = findCandidate(text, "model")
-                }
-                .addOnFailureListener {
-                    status = "OCR failed: ${it.message.orEmpty()}"
-                }
-        }
-    }
-
-    val photoCaptureLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap: Bitmap? ->
-        if (bitmap == null) {
-            return@rememberLauncherForActivityResult
-        }
-
-        runCatching { saveBitmapToCache(context, bitmap) }
-            .onSuccess { uri ->
-                capturedPhotoUris = capturedPhotoUris + uri.toString()
-                status = "Captured ${capturedPhotoUris.size} photo(s)"
-            }
-            .onFailure { ex ->
-                status = "Photo capture failed: ${ex.message.orEmpty()}"
-            }
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            runCatching {
-                when (pendingCameraAction) {
-                    CameraAction.ScanText -> scanLauncher.launch(null)
-                    CameraAction.CapturePhoto -> photoCaptureLauncher.launch(null)
-                }
-            }
-                .onFailure { status = "Failed to open camera: ${it.message.orEmpty()}" }
-        } else {
-            status = "Camera permission denied"
-        }
-    }
+    var activeCameraActionName by rememberSaveable { mutableStateOf("") }
+    val activeCameraAction = CameraAction.entries.firstOrNull { it.name == activeCameraActionName }
 
     fun refreshInventorySummary() {
         scope.launch {
@@ -188,7 +130,7 @@ fun InventoryScreen() {
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 label = { Text("Search products") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_SEARCH)
             )
 
             if (filteredItems.isEmpty()) {
@@ -253,26 +195,11 @@ fun InventoryScreen() {
                     editingItemId = ""
                     isAddingItem = true
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_ADD)
             )
         } else {
             val launchCameraAction = { action: CameraAction ->
-                pendingCameraAction = action
-                val hasPermission = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.CAMERA
-                ) == PackageManager.PERMISSION_GRANTED
-
-                if (hasPermission) {
-                    runCatching {
-                        when (action) {
-                            CameraAction.ScanText -> scanLauncher.launch(null)
-                            CameraAction.CapturePhoto -> photoCaptureLauncher.launch(null)
-                        }
-                    }.onFailure { status = "Failed to open camera: ${it.message.orEmpty()}" }
-                } else {
-                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                }
+                activeCameraActionName = action.name
             }
 
             val isEditing = editingItemId.isNotBlank()
@@ -323,28 +250,28 @@ fun InventoryScreen() {
                 value = productName,
                 onValueChange = { productName = it },
                 label = { Text("Product Name") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_PRODUCT_NAME)
             )
 
             OutlinedTextField(
                 value = quantity,
                 onValueChange = { quantity = it },
                 label = { Text("Quantity") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_QUANTITY)
             )
 
             OutlinedTextField(
                 value = costPrice,
                 onValueChange = { costPrice = it },
                 label = { Text("Cost Price") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_COST_PRICE)
             )
 
             OutlinedTextField(
                 value = sellingPrice,
                 onValueChange = { sellingPrice = it },
                 label = { Text("Selling Price") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_SELLING_PRICE)
             )
 
             DatePickerField(
@@ -431,11 +358,42 @@ fun InventoryScreen() {
                         )
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.INVENTORY_SAVE)
             )
         }
 
         StatusBanner(status)
+
+        if (activeCameraAction != null) {
+            com.shopkeeper.mobile.ui.components.CameraCaptureDialog(
+                title = if (activeCameraAction == CameraAction.ScanText) "Scan Item Details" else "Capture Item Photo",
+                subtitle = if (activeCameraAction == CameraAction.ScanText) {
+                    "Capture a clear image of the model or serial label, then review the extracted values before saving."
+                } else {
+                    "Capture a full-resolution photo of the item for inventory records."
+                },
+                mode = if (activeCameraAction == CameraAction.ScanText) {
+                    com.shopkeeper.mobile.ui.components.CameraCaptureMode.ScanText
+                } else {
+                    com.shopkeeper.mobile.ui.components.CameraCaptureMode.CapturePhoto
+                },
+                onDismissRequest = { activeCameraActionName = "" },
+                onTextCaptured = { text ->
+                    extractedSerial = findCandidate(text, "serial")
+                    extractedModel = findCandidate(text, "model")
+                    status = if (extractedSerial.isBlank() && extractedModel.isBlank()) {
+                        "Scan complete. Review the image results and enter any missing values manually."
+                    } else {
+                        "Scan complete. Review the extracted model and serial values before saving."
+                    }
+                },
+                onPhotoCaptured = { uri ->
+                    capturedPhotoUris = capturedPhotoUris + uri.toString()
+                    status = "Captured ${capturedPhotoUris.size + 1} photo(s)"
+                },
+                onError = { status = it }
+            )
+        }
 
         if (pendingDeleteItemId.isNotBlank()) {
             AlertDialog(
@@ -479,14 +437,6 @@ private enum class CameraAction {
     CapturePhoto
 }
 
-private fun saveBitmapToCache(context: android.content.Context, bitmap: Bitmap): Uri {
-    val dir = File(context.cacheDir, "inventory-photos").apply { mkdirs() }
-    val file = File(dir, "item-${Instant.now().toEpochMilli()}.jpg")
-    FileOutputStream(file).use { out ->
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-    }
-    return Uri.fromFile(file)
-}
 
 private fun findCandidate(text: String, key: String): String {
     val lines = text.lines()

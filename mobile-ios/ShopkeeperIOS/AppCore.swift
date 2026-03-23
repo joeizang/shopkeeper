@@ -131,8 +131,16 @@ struct RoleCapabilities {
 
 struct AppConfig {
     static var apiBaseURL: URL {
-        let raw = (Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String) ?? "http://127.0.0.1:5057"
-        return URL(string: raw.hasSuffix("/") ? raw : raw + "/") ?? URL(string: "http://127.0.0.1:5057/")!
+        #if DEBUG
+        let fallback = "http://192.168.0.189/api/shopkeeper/"
+        #else
+        let fallback = "https://api.shopkeeper.example.com/api/shopkeeper/"
+        #endif
+
+        let environmentOverride = ProcessInfo.processInfo.environment["SHOPKEEPER_API_BASE_URL"]
+        let infoValue = Bundle.main.object(forInfoDictionaryKey: "API_BASE_URL") as? String
+        let raw = environmentOverride ?? infoValue ?? fallback
+        return URL(string: raw.hasSuffix("/") ? raw : raw + "/") ?? URL(string: fallback)!
     }
 }
 

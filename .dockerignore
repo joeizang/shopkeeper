@@ -1,0 +1,16 @@
+.git
+.gitignore
+**/bin/
+**/obj/
+!backend-api/src/Shopkeeper.Api/obj/
+!backend-api/src/Shopkeeper.Api/obj/**
+**/TestResults/
+**/.idea/
+**/.vscode/
+**/.DS_Store
+**/.gradle/
+**/build/
+backend-api/src/Shopkeeper.Api/.env
+backend-api/src/Shopkeeper.Api/.env.local
+mobile-android/
+mobile-ios/

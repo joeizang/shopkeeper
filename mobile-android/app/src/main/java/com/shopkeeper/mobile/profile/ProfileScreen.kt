@@ -49,7 +49,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 @Composable
-fun ProfileScreen() {
+fun ProfileScreen(onLogout: () -> Unit = {}) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val gateway = remember(context) { ShopkeeperDataGateway.get(context) }
@@ -758,6 +758,27 @@ fun ProfileScreen() {
                                     status = "Google login failed: ${it.message.orEmpty()}"
                                 }
                         }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+
+
+        AccentCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SectionTitle(
+                    title = "Session",
+                    subtitle = "Sign out on this device when you are done."
+                )
+                BrickButton(
+                    text = "Log Out",
+                    onClick = {
+                        gateway.logout()
+                        onLogout()
                     },
                     modifier = Modifier.fillMaxWidth()
                 )

@@ -1,0 +1,11 @@
+services:
+  api:
+    build: null
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    working_dir: /workspace/backend-api/src/Shopkeeper.Api
+    command: dotnet run --no-launch-profile
+    volumes:
+      - ./:/workspace
+    environment:
+      ASPNETCORE_ENVIRONMENT: E2E
+      E2E__AdminToken: shopkeeper-e2e-token

@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: shopkeeper-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shopkeeper
+      POSTGRES_USER: shopkeeper
+      POSTGRES_PASSWORD: shopkeeper-dev-password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopkeeper -d shopkeeper"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - shopkeeper-postgres-data:/var/lib/postgresql/data
+    networks:
+      - shopkeeper-net
+
+  api:
+    build:
+      context: .
+      dockerfile: backend-api/src/Shopkeeper.Api/Dockerfile
+    container_name: shopkeeper-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://0.0.0.0:5000
+      AppHttpsRedirectionEnabled: "false"
+      DbConnectionString: Host=postgres;Port=5432;Database=shopkeeper;Username=shopkeeper;Password=shopkeeper-dev-password
+      Jwt__Issuer: shopkeeper-api
+      Jwt__Audience: shopkeeper-mobile
+      Jwt__SigningKey: replace-with-a-32-character-minimum-secret
+      Jwt__AccessTokenMinutes: "60"
+      Jwt__RefreshTokenDays: "30"
+      MagicLink__AppLinkBaseUrl: shopkeeper://auth/magic-link
+      MagicLink__ExpiryMinutes: "30"
+      MagicLink__MaxRequestsPerMinutePerEmail: "3"
+      Server__ListenHost: 0.0.0.0
+      Server__ListenPort: "5000"
+      Server__TrustAllForwardedHeaders: "true"
+      Cors__AllowedOrigins__0: http://localhost
+    expose:
+      - "5000"
+    networks:
+      - shopkeeper-net
+
+  caddy:
+    image: caddy:2
+    container_name: shopkeeper-caddy
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - shopkeeper-net
+
+volumes:
+  shopkeeper-postgres-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  shopkeeper-net:

@@ -21,6 +21,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.CreditRepaymentInput
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
@@ -32,6 +33,7 @@ import com.shopkeeper.mobile.ui.components.ScreenColumn
 import com.shopkeeper.mobile.ui.components.ScreenHeader
 import com.shopkeeper.mobile.ui.components.SectionTitle
 import com.shopkeeper.mobile.ui.components.StatusBanner
+import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -118,7 +120,7 @@ fun CreditScreen() {
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = saleDropdownExpanded) },
                     modifier = Modifier
                         .menuAnchor()
-                        .fillMaxWidth()
+                        .fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_DROPDOWN)
                 )
 
                 ExposedDropdownMenu(
@@ -157,7 +159,7 @@ fun CreditScreen() {
                     value = repaymentAmount,
                     onValueChange = { repaymentAmount = it },
                     label = { Text("Repayment Amount (NGN)") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_AMOUNT)
                 )
 
                 PaymentMethodDropdown(
@@ -170,7 +172,7 @@ fun CreditScreen() {
                     value = reference,
                     onValueChange = { reference = it },
                     label = { Text("Reference") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_REFERENCE)
                 )
 
                 OutlinedTextField(
@@ -179,7 +181,7 @@ fun CreditScreen() {
                     label = { Text("Notes") },
                     minLines = 4,
                     maxLines = 8,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_NOTES)
                 )
 
                 BrickButton(text = "Apply Repayment", onClick = {
@@ -207,7 +209,7 @@ fun CreditScreen() {
                             onFailure = { "Repayment failed: ${it.message.orEmpty()}" }
                         )
                     }
-                }, modifier = Modifier.fillMaxWidth())
+                }, modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_SUBMIT))
             }
         }
 

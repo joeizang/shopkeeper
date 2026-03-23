@@ -7,13 +7,30 @@ plugins {
     id("org.jetbrains.kotlin.kapt")
 }
 
-val apiBaseUrl = (
-    project.findProperty("shopkeeper.apiBaseUrl") as String?
-        ?: System.getenv("SHOPKEEPER_API_BASE_URL")
-        ?: "http://192.168.0.189:5057/"
-    ).let { raw ->
-        if (raw.endsWith("/")) raw else "$raw/"
-    }
+fun normalizedApiBaseUrl(raw: String): String = if (raw.endsWith("/")) raw else "$raw/"
+
+val debugApiBaseUrl = normalizedApiBaseUrl(
+    (
+        project.findProperty("shopkeeper.debugApiBaseUrl") as String?
+            ?: System.getenv("SHOPKEEPER_DEBUG_API_BASE_URL")
+            ?: System.getenv("SHOPKEEPER_API_BASE_URL")
+            ?: "http://192.168.0.189/api/shopkeeper/"
+        )
+)
+
+val e2eAdminToken = (
+    project.findProperty("shopkeeper.e2eAdminToken") as String?
+        ?: System.getenv("SHOPKEEPER_E2E_ADMIN_TOKEN")
+        ?: "shopkeeper-e2e-token"
+)
+
+val releaseApiBaseUrl = normalizedApiBaseUrl(
+    (
+        project.findProperty("shopkeeper.releaseApiBaseUrl") as String?
+            ?: System.getenv("SHOPKEEPER_RELEASE_API_BASE_URL")
+            ?: "https://api.shopkeeper.example.com/api/shopkeeper/"
+        )
+)
 
 android {
     namespace = "com.shopkeeper.mobile"
@@ -27,11 +44,17 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "API_BASE_URL", "\"$apiBaseUrl\"")
     }
 
     buildTypes {
+        debug {
+            buildConfigField("String", "API_BASE_URL", "\"$debugApiBaseUrl\"")
+            buildConfigField("String", "E2E_ADMIN_TOKEN", "\"$e2eAdminToken\"")
+        }
+
         release {
+            buildConfigField("String", "API_BASE_URL", "\"$releaseApiBaseUrl\"")
+            buildConfigField("String", "E2E_ADMIN_TOKEN", "\"\"")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -94,4 +117,11 @@ dependencies {
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
+
+    androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
 }

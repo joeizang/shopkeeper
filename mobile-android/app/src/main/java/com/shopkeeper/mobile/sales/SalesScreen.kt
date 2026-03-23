@@ -1,9 +1,12 @@
 package com.shopkeeper.mobile.sales
 
 import android.net.Uri
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -23,6 +26,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import com.shopkeeper.mobile.core.data.NewSaleInput
 import com.shopkeeper.mobile.core.data.NewSaleLineInput
@@ -40,11 +44,13 @@ import com.shopkeeper.mobile.ui.components.DatePickerField
 import com.shopkeeper.mobile.ui.components.MetricCard
 import com.shopkeeper.mobile.ui.components.PaymentMethodDropdown
 import com.shopkeeper.mobile.ui.components.PaymentMethodOption
+import com.shopkeeper.mobile.ui.components.SaleCelebrationOverlay
 import com.shopkeeper.mobile.ui.components.ScreenColumn
 import com.shopkeeper.mobile.ui.components.ScreenHeader
 import com.shopkeeper.mobile.ui.components.SectionTitle
 import com.shopkeeper.mobile.ui.components.SoftButton
 import com.shopkeeper.mobile.ui.components.StatusBanner
+import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
@@ -60,7 +66,6 @@ fun SalesScreen() {
     val clipboardManager = remember(context) {
         context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
     }
-    val recognizer = remember { com.google.mlkit.vision.text.TextRecognition.getClient(com.google.mlkit.vision.text.latin.TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     var customerName by rememberSaveable { mutableStateOf("") }
     var customerPhone by rememberSaveable { mutableStateOf("") }
@@ -75,9 +80,8 @@ fun SalesScreen() {
     val paymentMethodDraft = PaymentMethodOption.fromCode(paymentMethodCodeDraft)
     var saleLines by rememberSaveable(stateSaver = UiSaleLinesSaver) { mutableStateOf<List<UiSaleLine>>(emptyList()) }
     var salePayments by rememberSaveable(stateSaver = UiSalePaymentsSaver) { mutableStateOf<List<UiSalePayment>>(emptyList()) }
-    var pendingScanActionName by rememberSaveable { mutableStateOf(SalesScanAction.Reference.name) }
-    val pendingScanAction = runCatching { SalesScanAction.valueOf(pendingScanActionName) }
-        .getOrDefault(SalesScanAction.Reference)
+    var activeScanActionName by rememberSaveable { mutableStateOf("") }
+    val activeScanAction = SalesScanAction.entries.firstOrNull { it.name == activeScanActionName }
 
     var inventory by remember { mutableStateOf<List<InventoryItemEntity>>(emptyList()) }
     var todayCompletedSales by remember { mutableStateOf<List<SaleEntity>>(emptyList()) }
@@ -85,6 +89,7 @@ fun SalesScreen() {
     var status by rememberSaveable { mutableStateOf("") }
     var lastSale by remember { mutableStateOf<RecordedSale?>(null) }
     var isCreatingSale by rememberSaveable { mutableStateOf(false) }
+    var showCelebration by remember { mutableStateOf(false) }
 
     fun refreshSummary() {
         scope.launch {
@@ -144,53 +149,8 @@ fun SalesScreen() {
         status = "Payment split added."
     }
 
-    val scanLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.TakePicturePreview()
-    ) { bitmap: android.graphics.Bitmap? ->
-        if (bitmap == null) {
-            return@rememberLauncherForActivityResult
-        }
-
-        val image = com.google.mlkit.vision.common.InputImage.fromBitmap(bitmap, 0)
-        recognizer.process(image)
-            .addOnSuccessListener { result ->
-                when (pendingScanAction) {
-                    SalesScanAction.Reference -> {
-                        paymentRefDraft = extractReferenceText(result.text)
-                        status = "Reference scanned. You can edit it before adding the payment split."
-                    }
-                    SalesScanAction.Customer -> {
-                        importCustomerDetails(result.text)
-                    }
-                }
-            }
-            .addOnFailureListener {
-                status = "Scan failed: ${it.message.orEmpty()}"
-            }
-    }
-
-    val cameraPermissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            scanLauncher.launch(null)
-        } else {
-            status = "Camera permission denied."
-        }
-    }
-
     fun launchScan(action: SalesScanAction) {
-        pendingScanActionName = action.name
-        val hasPermission = androidx.core.content.ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.CAMERA
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-
-        if (hasPermission) {
-            scanLauncher.launch(null)
-        } else {
-            cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
-        }
+        activeScanActionName = action.name
     }
 
     LaunchedEffect(Unit) {
@@ -210,6 +170,13 @@ fun SalesScreen() {
         }
     }
 
+    LaunchedEffect(searchQuery, filteredInventory.size) {
+        if (searchQuery.isNotBlank() && filteredInventory.size == 1) {
+            selectedItemId = filteredInventory.first().id
+            selectedItemQuantity = "1"
+        }
+    }
+
     val subtotal = saleLines.sumOf { it.quantity * it.unitPrice }
     val configuredDiscountPercent = shopSummary?.defaultDiscountPercent ?: 0.0
     val discountAmount = if (applyShopDiscount) subtotal * configuredDiscountPercent else 0.0
@@ -221,6 +188,7 @@ fun SalesScreen() {
     val paidAmount = salePayments.sumOf { it.amount }
     val outstandingAmount = (totalAmount - paidAmount).coerceAtLeast(0.0)
 
+    Box(modifier = Modifier.fillMaxSize()) {
     ScreenColumn {
         ScreenHeader(
             title = "Sales",
@@ -254,8 +222,9 @@ fun SalesScreen() {
                 onClick = {
                     isCreatingSale = true
                     status = ""
+                    refreshSummary()
                 },
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_ADD),
                 icon = Icons.Outlined.Add
             )
 
@@ -348,21 +317,21 @@ fun SalesScreen() {
                 value = customerName,
                 onValueChange = { customerName = it },
                 label = { Text("Customer Name") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_CUSTOMER_NAME)
             )
 
             OutlinedTextField(
                 value = customerPhone,
                 onValueChange = { customerPhone = it },
                 label = { Text("Customer Phone") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_CUSTOMER_PHONE)
             )
 
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 label = { Text("Search inventory") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_SEARCH)
             )
 
             SectionTitle(
@@ -375,6 +344,11 @@ fun SalesScreen() {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .testTag("sales.item.${item.productName}")
+                                .clickable {
+                                    selectedItemId = item.id
+                                    selectedItemQuantity = "1"
+                                }
                                 .padding(10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -390,7 +364,8 @@ fun SalesScreen() {
                                 onClick = {
                                     selectedItemId = item.id
                                     selectedItemQuantity = "1"
-                                }
+                                },
+                                modifier = Modifier.testTag("sales.pick.${item.productName}")
                             )
                         }
                     }
@@ -409,7 +384,7 @@ fun SalesScreen() {
                             value = selectedItemQuantity,
                             onValueChange = { selectedItemQuantity = it },
                             label = { Text("Quantity for selected item") },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_SELECTED_QUANTITY)
                         )
                         BrickButton(
                             text = "Add / Update Line",
@@ -417,7 +392,7 @@ fun SalesScreen() {
                                 addLine(selectedItem, selectedItemQuantity.toIntOrNull() ?: 1)
                                 status = "Line item updated."
                             },
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_ADD_LINE)
                         )
                     }
                 }
@@ -515,7 +490,7 @@ fun SalesScreen() {
                 value = paymentAmountDraft,
                 onValueChange = { paymentAmountDraft = it },
                 label = { Text("Payment Amount") },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_PAYMENT_AMOUNT)
             )
 
             PaymentMethodDropdown(
@@ -529,7 +504,7 @@ fun SalesScreen() {
                     value = paymentRefDraft,
                     onValueChange = { paymentRefDraft = it },
                     label = { Text("POS/Transfer Ref (optional)") },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.SALES_PAYMENT_REFERENCE)
                 )
                 SoftButton(
                     text = "Scan Ref",
@@ -541,7 +516,7 @@ fun SalesScreen() {
             BrickButton(
                 text = "Add Payment Split",
                 onClick = { addPaymentSplit() },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_ADD_PAYMENT_SPLIT)
             )
 
             if (salePayments.isEmpty()) {
@@ -584,7 +559,7 @@ fun SalesScreen() {
                 label = "Due Date (required when outstanding remains)",
                 value = dueDateUtc,
                 onValueChange = { dueDateUtc = it },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.SALES_DUE_DATE)
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
@@ -643,6 +618,7 @@ fun SalesScreen() {
                                     customerPhone = ""
                                     dueDateUtc = ""
                                     applyShopDiscount = false
+                                    showCelebration = true
                                     refreshSummary()
                                     if (it.synced) "Sale saved and synced (${it.saleNumber})" else "Sale saved locally, sync pending"
                                 },
@@ -650,14 +626,49 @@ fun SalesScreen() {
                             )
                         }
                     },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.SALES_SAVE)
                 )
 
                 SoftButton(text = "Cancel", onClick = { isCreatingSale = false }, modifier = Modifier.weight(1f))
             }
         }
 
+        if (activeScanAction != null) {
+            com.shopkeeper.mobile.ui.components.CameraCaptureDialog(
+                title = if (activeScanAction == SalesScanAction.Reference) "Scan Payment Reference" else "Scan Customer Details",
+                subtitle = if (activeScanAction == SalesScanAction.Reference) {
+                    "Capture the POS slip or transfer reference so OCR can pull the transaction text."
+                } else {
+                    "Capture a screenshot or contact card to import the customer name and phone details."
+                },
+                mode = com.shopkeeper.mobile.ui.components.CameraCaptureMode.ScanText,
+                onDismissRequest = { activeScanActionName = "" },
+                onTextCaptured = { text ->
+                    when (activeScanAction) {
+                        SalesScanAction.Reference -> {
+                            paymentRefDraft = extractReferenceText(text)
+                            status = if (paymentRefDraft.isBlank()) {
+                                "Scan complete. Review the OCR text and enter the reference manually if needed."
+                            } else {
+                                "Reference scanned. You can edit it before adding the payment split."
+                            }
+                        }
+                        SalesScanAction.Customer -> {
+                            importCustomerDetails(text)
+                        }
+                    }
+                },
+                onError = { status = it }
+            )
+        }
+
         StatusBanner(status)
+    }
+
+    SaleCelebrationOverlay(
+        visible = showCelebration,
+        onDismiss = { showCelebration = false }
+    )
     }
 }
 

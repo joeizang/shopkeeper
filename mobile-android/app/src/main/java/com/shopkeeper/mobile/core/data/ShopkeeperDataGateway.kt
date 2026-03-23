@@ -53,6 +53,7 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.StateFlow
 import retrofit2.HttpException
 import org.json.JSONObject
 import java.io.File
@@ -62,6 +63,19 @@ import java.time.ZoneId
 import java.util.UUID
 
 class ShopkeeperDataGateway private constructor(private val appContext: Context) {
+    private fun createStartupSafePreferences(context: Context, name: String) =
+        runCatching {
+            val userManager = context.getSystemService(android.os.UserManager::class.java)
+            val storageContext = if (userManager?.isUserUnlocked == false) {
+                context.createDeviceProtectedStorageContext()
+            } else {
+                context
+            }
+            storageContext.getSharedPreferences(name, Context.MODE_PRIVATE)
+        }.getOrElse {
+            context.createDeviceProtectedStorageContext().getSharedPreferences(name, Context.MODE_PRIVATE)
+        }
+
     private val db = ShopkeeperDatabase.get(appContext)
     private val sessionManager = AuthSessionManager(appContext)
     private val api = NetworkFactory.createApi(sessionManager)
@@ -72,7 +86,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     private val saleCreateAdapter = moshi.adapter(CreateSaleRequest::class.java)
     private val saleSyncPayloadAdapter = moshi.adapter(SaleSyncPayload::class.java)
     private val repaymentAdapter = moshi.adapter(CreditRepaymentEnvelope::class.java)
-    private val syncPrefs = appContext.getSharedPreferences("shopkeeper_sync_meta", Context.MODE_PRIVATE)
+    private val syncPrefs = createStartupSafePreferences(appContext, "shopkeeper_sync_meta")
 
     suspend fun refreshInventory(): List<InventoryItemEntity> = withContext(Dispatchers.IO) {
         val local = db.inventoryDao().getAll()
@@ -223,6 +237,14 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
+    fun isAuthenticated(): Boolean = sessionManager.hasActiveSession()
+
+    fun authState(): StateFlow<Boolean> = sessionManager.authState
+
+    fun logout() {
+        sessionManager.clear()
+    }
+
     fun sessionRole(): ShopRole = ShopRole.fromApiValue(sessionManager.role())
 
     fun sessionCapabilities(): SessionCapabilities = SessionCapabilities.forRole(sessionRole())
@@ -306,6 +328,49 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 MagicLinkVerifyRequestDto(
                     token = token.trim(),
                     shopId = shopId
+                )
+            )
+            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun login(login: String, password: String, shopId: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val auth = api.login(
+                LoginRequest(
+                    login = login.trim(),
+                    password = password,
+                    shopId = shopId
+                )
+            )
+            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
+            Result.success(Unit)
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun registerOwner(
+        fullName: String,
+        email: String,
+        password: String,
+        shopName: String,
+        vatEnabled: Boolean,
+        vatRate: Double
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val auth = api.registerOwner(
+                RegisterOwnerRequest(
+                    fullName = fullName.trim(),
+                    email = email.trim(),
+                    phone = null,
+                    password = password,
+                    shopName = shopName.trim(),
+                    vatEnabled = vatEnabled,
+                    vatRate = vatRate
                 )
             )
             sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
@@ -1145,8 +1210,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             return block()
         } catch (httpEx: HttpException) {
             if (httpEx.code() == 401 || httpEx.code() == 403) {
-                ensureAuthenticated(forceRefresh = true)
-                return block()
+                sessionManager.clear()
+                throw IllegalStateException("Session expired. Sign in again.")
             }
             throw httpEx
         }
@@ -1161,68 +1226,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             return
         }
 
-        authenticateWithBootstrap(DefaultOwner.Email, DefaultOwner.ShopName)
-    }
-
-    private suspend fun authenticateWithBootstrap(email: String, shopName: String) {
-        val login = LoginRequest(
-            login = email,
-            password = DefaultOwner.Password,
-            shopId = null
-        )
-
-        try {
-            val auth = api.login(login)
-            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
-            return
-        } catch (_: Exception) {
-        }
-
-        try {
-            api.registerOwner(
-                RegisterOwnerRequest(
-                    fullName = DefaultOwner.FullName,
-                    email = email,
-                    phone = null,
-                    password = DefaultOwner.Password,
-                    shopName = shopName,
-                    vatEnabled = true,
-                    vatRate = 0.075
-                )
-            )
-        } catch (_: Exception) {
-        }
-
-        try {
-            val auth = api.login(login)
-            sessionManager.saveSession(auth.accessToken, auth.refreshToken, auth.shopId, auth.role)
-            return
-        } catch (_: Exception) {
-        }
-
-        val fallbackEmail = "owner.${System.currentTimeMillis()}@shopkeeper.local"
-        val fallbackShop = "My Shop ${System.currentTimeMillis() % 10000}"
-
-        api.registerOwner(
-            RegisterOwnerRequest(
-                fullName = DefaultOwner.FullName,
-                email = fallbackEmail,
-                phone = null,
-                password = DefaultOwner.Password,
-                shopName = fallbackShop,
-                vatEnabled = true,
-                vatRate = 0.075
-            )
-        )
-
-        val finalAuth = api.login(
-            LoginRequest(
-                login = fallbackEmail,
-                password = DefaultOwner.Password,
-                shopId = null
-            )
-        )
-        sessionManager.saveSession(finalAuth.accessToken, finalAuth.refreshToken, finalAuth.shopId, finalAuth.role)
+        throw IllegalStateException("Authentication required.")
     }
 
     private fun parseIsoDate(iso: String): LocalDate? {
@@ -1781,13 +1785,6 @@ private data class CreditRepaymentEnvelope(
     val saleId: String,
     val request: CreditRepaymentRequest
 )
-
-private object DefaultOwner {
-    const val FullName = "Shop Owner"
-    const val Email = "owner@shopkeeper.local"
-    const val Password = "Shopkeeper123!"
-    const val ShopName = "My Shop"
-}
 
 private object QueueEntity {
     const val InventoryCreate = "inventory.create"

@@ -12,6 +12,13 @@
 		A10000000000000000001003 /* LoginView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000103 /* LoginView.swift */; };
 		A10000000000000000001004 /* AppCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000104 /* AppCore.swift */; };
 		A10000000000000000001005 /* FeatureViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000105 /* FeatureViews.swift */; };
+		A10000000000000000001006 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000108 /* Theme.swift */; };
+		A10000000000000000001007 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000109 /* OnboardingView.swift */; };
+
+		B10000000000000000001031 /* BaseUITestCase.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000131 /* BaseUITestCase.swift */; };
+		B10000000000000000001032 /* AuthFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000132 /* AuthFlowUITests.swift */; };
+		B10000000000000000001033 /* InventoryFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000133 /* InventoryFlowUITests.swift */; };
+		B10000000000000000001034 /* SalesCreditsReportsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000134 /* SalesCreditsReportsUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,10 +30,28 @@
 		A10000000000000000000105 /* FeatureViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeatureViews.swift; sourceTree = "<group>"; };
 		A10000000000000000000106 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000107 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
+		A10000000000000000000108 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A10000000000000000000109 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
+		A10000000000000000000110 /* Debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Debug.xcconfig; sourceTree = "<group>"; };
+		A10000000000000000000111 /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Release.xcconfig; sourceTree = "<group>"; };
+
+		B100000000000000000000F1 /* ShopkeeperIOSUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShopkeeperIOSUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B10000000000000000000131 /* BaseUITestCase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BaseUITestCase.swift; sourceTree = "<group>"; };
+		B10000000000000000000132 /* AuthFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowUITests.swift; sourceTree = "<group>"; };
+		B10000000000000000000133 /* InventoryFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryFlowUITests.swift; sourceTree = "<group>"; };
+		B10000000000000000000134 /* SalesCreditsReportsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesCreditsReportsUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		A10000000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+
+		B10000000000000000000021 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -41,6 +66,7 @@
 			children = (
 				A10000000000000000000011 /* ShopkeeperIOS */,
 				A10000000000000000000012 /* Products */,
+				B10000000000000000000013 /* ShopkeeperIOSUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -52,18 +78,43 @@
 				A10000000000000000000103 /* LoginView.swift */,
 				A10000000000000000000104 /* AppCore.swift */,
 				A10000000000000000000105 /* FeatureViews.swift */,
+				A10000000000000000000108 /* Theme.swift */,
+				A10000000000000000000109 /* OnboardingView.swift */,
+				A10000000000000000000120 /* Config */,
 				A10000000000000000000106 /* Info.plist */,
 				A10000000000000000000107 /* README.md */,
 			);
 			path = ShopkeeperIOS;
 			sourceTree = "<group>";
 		};
+		A10000000000000000000120 /* Config */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000110 /* Debug.xcconfig */,
+				A10000000000000000000111 /* Release.xcconfig */,
+			);
+			path = Config;
+			sourceTree = "<group>";
+		};
 		A10000000000000000000012 /* Products */ = {
 			isa = PBXGroup;
 			children = (
 				A100000000000000000000F0 /* ShopkeeperIOS.app */,
+				B100000000000000000000F1 /* ShopkeeperIOSUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+
+		B10000000000000000000013 /* ShopkeeperIOSUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B10000000000000000000131 /* BaseUITestCase.swift */,
+				B10000000000000000000132 /* AuthFlowUITests.swift */,
+				B10000000000000000000133 /* InventoryFlowUITests.swift */,
+				B10000000000000000000134 /* SalesCreditsReportsUITests.swift */,
+			);
+			path = ShopkeeperIOSUITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -86,7 +137,36 @@
 			productReference = A100000000000000000000F0 /* ShopkeeperIOS.app */;
 			productType = "com.apple.product-type.application";
 		};
+
+		B10000000000000000000031 /* ShopkeeperIOSUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000052 /* Build configuration list for PBXNativeTarget "ShopkeeperIOSUITests" */;
+			buildPhases = (
+				B10000000000000000000042 /* Sources */,
+				B10000000000000000000021 /* Frameworks */,
+				B10000000000000000000043 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B10000000000000000000081 /* PBXTargetDependency */,
+			);
+			name = ShopkeeperIOSUITests;
+			productName = ShopkeeperIOSUITests;
+			productReference = B100000000000000000000F1 /* ShopkeeperIOSUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
+
+/* Begin PBXContainerItemProxy section */
+		B10000000000000000000080 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A10000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A10000000000000000000030;
+			remoteInfo = ShopkeeperIOS;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXProject section */
 		A10000000000000000000001 /* Project object */ = {
@@ -98,6 +178,10 @@
 				TargetAttributes = {
 					A10000000000000000000030 = {
 						CreatedOnToolsVersion = 16.0;
+					};
+					B10000000000000000000031 = {
+						CreatedOnToolsVersion = 16.0;
+						TestTargetID = A10000000000000000000030;
 					};
 				};
 			};
@@ -115,12 +199,20 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000030 /* ShopkeeperIOS */,
+				B10000000000000000000031 /* ShopkeeperIOSUITests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A10000000000000000000041 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000043 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -139,14 +231,36 @@
 				A10000000000000000001003 /* LoginView.swift in Sources */,
 				A10000000000000000001002 /* RootView.swift in Sources */,
 				A10000000000000000001001 /* ShopkeeperIOSApp.swift in Sources */,
+				A10000000000000000001006 /* Theme.swift in Sources */,
+				A10000000000000000001007 /* OnboardingView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000042 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B10000000000000000001032 /* AuthFlowUITests.swift in Sources */,
+				B10000000000000000001031 /* BaseUITestCase.swift in Sources */,
+				B10000000000000000001033 /* InventoryFlowUITests.swift in Sources */,
+				B10000000000000000001034 /* SalesCreditsReportsUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		B10000000000000000000081 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A10000000000000000000030 /* ShopkeeperIOS */;
+			targetProxy = B10000000000000000000080 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
 		A10000000000000000000070 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000110 /* Debug.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -179,6 +293,7 @@
 		};
 		A10000000000000000000071 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000111 /* Release.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
@@ -314,6 +429,54 @@
 			};
 			name = Release;
 		};
+
+		B10000000000000000000084 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.shopkeeper.mobileiosUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = ShopkeeperIOS;
+			};
+			name = Debug;
+		};
+		B10000000000000000000085 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.shopkeeper.mobileiosUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = ShopkeeperIOS;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -331,6 +494,16 @@
 			buildConfigurations = (
 				A10000000000000000000072 /* Debug */,
 				A10000000000000000000073 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+
+		B10000000000000000000052 /* Build configuration list for PBXNativeTarget "ShopkeeperIOSUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B10000000000000000000084 /* Debug */,
+				B10000000000000000000085 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -1,0 +1,52 @@
+package com.shopkeeper.mobile.ui.test
+
+object ShopkeeperTestTags {
+    const val AUTH_MODE_SIGN_IN = "auth.mode.signIn"
+    const val AUTH_MODE_REGISTER = "auth.mode.register"
+    const val AUTH_LOGIN_EMAIL = "auth.login.email"
+    const val AUTH_LOGIN_PASSWORD = "auth.login.password"
+    const val AUTH_LOGIN_SUBMIT = "auth.login.submit"
+    const val AUTH_REGISTER_FULL_NAME = "auth.register.fullName"
+    const val AUTH_REGISTER_EMAIL = "auth.register.email"
+    const val AUTH_REGISTER_PASSWORD = "auth.register.password"
+    const val AUTH_REGISTER_SHOP_NAME = "auth.register.shopName"
+    const val AUTH_REGISTER_VAT_RATE = "auth.register.vatRate"
+    const val AUTH_REGISTER_SUBMIT = "auth.register.submit"
+
+    const val NAV_HOME = "nav.home"
+    const val NAV_STOCK = "nav.stock"
+    const val NAV_SALES = "nav.sales"
+    const val NAV_REPORTS = "nav.reports"
+    const val NAV_CREDIT = "nav.credit"
+    const val NAV_SYNC = "nav.sync"
+
+    const val INVENTORY_ADD = "inventory.summary.add"
+    const val INVENTORY_SEARCH = "inventory.summary.search"
+    const val INVENTORY_PRODUCT_NAME = "inventory.form.productName"
+    const val INVENTORY_QUANTITY = "inventory.form.quantity"
+    const val INVENTORY_COST_PRICE = "inventory.form.costPrice"
+    const val INVENTORY_SELLING_PRICE = "inventory.form.sellingPrice"
+    const val INVENTORY_SAVE = "inventory.form.save"
+
+    const val SALES_ADD = "sales.summary.add"
+    const val SALES_CUSTOMER_NAME = "sales.form.customerName"
+    const val SALES_CUSTOMER_PHONE = "sales.form.customerPhone"
+    const val SALES_SEARCH = "sales.form.searchInventory"
+    const val SALES_SELECTED_QUANTITY = "sales.form.selectedQuantity"
+    const val SALES_ADD_LINE = "sales.form.addLine"
+    const val SALES_PAYMENT_AMOUNT = "sales.form.paymentAmount"
+    const val SALES_PAYMENT_REFERENCE = "sales.form.paymentReference"
+    const val SALES_ADD_PAYMENT_SPLIT = "sales.form.addPaymentSplit"
+    const val SALES_DUE_DATE = "sales.form.dueDate"
+    const val SALES_SAVE = "sales.form.save"
+
+    const val CREDITS_DROPDOWN = "credits.repayment.dropdown"
+    const val CREDITS_AMOUNT = "credits.repayment.amount"
+    const val CREDITS_REFERENCE = "credits.repayment.reference"
+    const val CREDITS_NOTES = "credits.repayment.notes"
+    const val CREDITS_SUBMIT = "credits.repayment.submit"
+
+    const val REPORTS_LOAD = "reports.load"
+    const val REPORTS_QUEUE_PDF = "reports.queue.pdf"
+    const val REPORTS_QUEUE_SPREADSHEET = "reports.queue.spreadsheet"
+}

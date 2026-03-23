@@ -26,7 +26,7 @@
 		<true/>
 	</dict>
 	<key>API_BASE_URL</key>
-	<string>http://127.0.0.1:5057</string>
+	<string>$(API_BASE_URL)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Shopkeeper uses the camera to scan inventory, customer details, and payment references.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

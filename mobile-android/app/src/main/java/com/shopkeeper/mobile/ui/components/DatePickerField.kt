@@ -41,9 +41,9 @@ fun DatePickerField(
     )
 
     OutlinedTextField(
-        value = parsedDate?.toString().orEmpty(),
-        onValueChange = {},
-        readOnly = true,
+        value = value,
+        onValueChange = onValueChange,
+        readOnly = false,
         label = { Text(label) },
         trailingIcon = {
             IconButton(onClick = { showPicker = true }) {

@@ -3,7 +3,6 @@ using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-using NodaTime;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Shopkeeper.Api.Data;
 
@@ -18,7 +17,7 @@ namespace Shopkeeper.Api.Migrations
         {
 #pragma warning disable 612, 618
             modelBuilder
-                .HasAnnotation("ProductVersion", "10.0.0")
+                .HasAnnotation("ProductVersion", "10.0.3")
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
@@ -97,7 +96,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("EntityId")
@@ -128,7 +127,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Email")
@@ -137,7 +136,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<bool>("EmailVerified")
                         .HasColumnType("boolean");
 
-                    b.Property<Instant>("LastUsedAtUtc")
+                    b.Property<DateTime>("LastUsedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Provider")
@@ -167,10 +166,10 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Instant>("DueDateUtc")
+                    b.Property<DateTime>("DueDateUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<decimal>("OutstandingAmount")
@@ -190,7 +189,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -210,7 +209,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("CreditAccountId")
@@ -244,7 +243,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("LastPulledAtUtc")
+                    b.Property<DateTime>("LastPulledAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<byte[]>("RowVersion")
@@ -255,7 +254,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -276,13 +275,13 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("LastError")
                         .HasColumnType("text");
 
-                    b.Property<Instant?>("SentAtUtc")
+                    b.Property<DateTime?>("SentAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
@@ -315,13 +314,13 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("CreatedByUserAccountId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("ExpenseDateUtc")
+                    b.Property<DateTime>("ExpenseDateUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Notes")
@@ -339,7 +338,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -358,7 +357,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<long>("BucketKey")
                         .HasColumnType("bigint");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("IdempotencyKey")
@@ -402,11 +401,11 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<decimal>("CostPrice")
                         .HasColumnType("numeric");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<LocalDate?>("ExpiryDate")
-                        .HasColumnType("date");
+                    b.Property<string>("ExpiryDate")
+                        .HasColumnType("text");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -438,7 +437,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -455,7 +454,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("InventoryItemId")
@@ -473,7 +472,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -489,20 +488,20 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant?>("ConsumedAtUtc")
+                    b.Property<DateTime?>("ConsumedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Email")
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("ExpiresAtUtc")
+                    b.Property<DateTime>("ExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("RequestIp")
                         .HasColumnType("text");
 
-                    b.Property<Instant>("RequestedAtUtc")
+                    b.Property<DateTime>("RequestedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("RequestedShopId")
@@ -534,7 +533,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("DeviceId")
@@ -543,13 +542,13 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<string>("DeviceName")
                         .HasColumnType("text");
 
-                    b.Property<Instant>("ExpiresAtUtc")
+                    b.Property<DateTime>("ExpiresAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Instant?>("LastSeenAtUtc")
+                    b.Property<DateTime?>("LastSeenAtUtc")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<Instant?>("RevokedAtUtc")
+                    b.Property<DateTime?>("RevokedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("ShopMembershipId")
@@ -591,7 +590,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("CreatedByUserAccountId")
@@ -617,7 +616,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -633,7 +632,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant?>("CompletedAtUtc")
+                    b.Property<DateTime?>("CompletedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("FailureReason")
@@ -653,7 +652,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("RequestedAtUtc")
+                    b.Property<DateTime>("RequestedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("RequestedByUserAccountId")
@@ -671,7 +670,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -689,7 +688,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("CreatedByMembershipId")
@@ -704,7 +703,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<decimal>("DiscountAmount")
                         .HasColumnType("numeric");
 
-                    b.Property<Instant?>("DueDateUtc")
+                    b.Property<DateTime?>("DueDateUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsCredit")
@@ -737,7 +736,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<decimal>("TotalAmount")
                         .HasColumnType("numeric");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<decimal>("VatAmount")
@@ -798,7 +797,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<decimal>("Amount")
                         .HasColumnType("numeric");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Method")
@@ -830,7 +829,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<decimal>("DefaultDiscountPercent")
@@ -848,7 +847,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("VatEnabled")
@@ -871,7 +870,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<bool>("IsActive")
@@ -891,7 +890,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("UserAccountId")
@@ -912,7 +911,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("CreatedByMembershipId")
@@ -936,7 +935,7 @@ namespace Shopkeeper.Api.Migrations
                     b.Property<Guid>("TenantId")
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("UpdatedAtUtc")
+                    b.Property<DateTime>("UpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.HasKey("Id");
@@ -952,7 +951,7 @@ namespace Shopkeeper.Api.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
-                    b.Property<Instant>("ClientUpdatedAtUtc")
+                    b.Property<DateTime>("ClientUpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ConflictReason")
@@ -976,7 +975,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("ServerUpdatedAtUtc")
+                    b.Property<DateTime>("ServerUpdatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<int>("Status")
@@ -1020,7 +1019,7 @@ namespace Shopkeeper.Api.Migrations
                         .IsConcurrencyToken()
                         .HasColumnType("text");
 
-                    b.Property<Instant>("CreatedAtUtc")
+                    b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Email")

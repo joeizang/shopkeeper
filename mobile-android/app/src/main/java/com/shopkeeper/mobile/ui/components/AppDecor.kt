@@ -1,5 +1,16 @@
 package com.shopkeeper.mobile.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -11,11 +22,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -26,14 +42,22 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 @Composable
 fun ShopkeeperBackground(
@@ -212,25 +236,47 @@ fun SelectionPill(
     }
 }
 
+enum class StatusKind { Info, Success, Warning, Error }
+
 @Composable
 fun StatusBanner(
     message: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    kind: StatusKind = StatusKind.Info
 ) {
     if (message.isBlank()) {
         return
     }
 
+    val bgColor = when (kind) {
+        StatusKind.Info -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f)
+        StatusKind.Success -> Color(0xFF2D9E5C).copy(alpha = 0.15f)
+        StatusKind.Warning -> Color(0xFFD49A2A).copy(alpha = 0.15f)
+        StatusKind.Error -> Color(0xFFCF3E3E).copy(alpha = 0.15f)
+    }
+    val borderColor = when (kind) {
+        StatusKind.Info -> MaterialTheme.colorScheme.secondary.copy(alpha = 0.24f)
+        StatusKind.Success -> Color(0xFF2D9E5C).copy(alpha = 0.4f)
+        StatusKind.Warning -> Color(0xFFD49A2A).copy(alpha = 0.4f)
+        StatusKind.Error -> Color(0xFFCF3E3E).copy(alpha = 0.4f)
+    }
+    val textColor = when (kind) {
+        StatusKind.Info -> MaterialTheme.colorScheme.onBackground
+        StatusKind.Success -> Color(0xFF2D9E5C)
+        StatusKind.Warning -> Color(0xFFD49A2A)
+        StatusKind.Error -> Color(0xFFCF3E3E)
+    }
+
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.secondary.copy(alpha = 0.12f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.24f))
+        color = bgColor,
+        border = BorderStroke(1.dp, borderColor)
     ) {
         Text(
             text = message,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            color = MaterialTheme.colorScheme.onBackground,
+            color = textColor,
             style = MaterialTheme.typography.bodySmall
         )
     }
@@ -290,6 +336,133 @@ fun SoftButton(
                 Spacer(modifier = Modifier.width(8.dp))
             }
             Text(text)
+        }
+    }
+}
+
+// -- Skeleton Loading Shimmer --
+
+@Composable
+fun SkeletonLoadingBox(
+    modifier: Modifier = Modifier,
+    height: Dp = 20.dp
+) {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val shimmerOffset by transition.animateFloat(
+        initialValue = -1f,
+        targetValue = 2f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmerOffset"
+    )
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(6.dp))
+            .background(
+                brush = Brush.horizontalGradient(
+                    colors = listOf(
+                        Color(0xFF1C2129),
+                        Color(0xFF2A303A),
+                        Color(0xFF1C2129)
+                    ),
+                    startX = shimmerOffset * 300f,
+                    endX = (shimmerOffset + 1f) * 300f
+                )
+            )
+    )
+}
+
+// -- Staggered Card Entry Animation --
+
+@Composable
+fun StaggeredAnimatedVisibility(
+    index: Int,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    var visible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        delay(index * 50L)
+        visible = true
+    }
+    AnimatedVisibility(
+        visible = visible,
+        modifier = modifier,
+        enter = fadeIn(animationSpec = tween(300)) + slideInVertically(
+            initialOffsetY = { it / 4 },
+            animationSpec = tween(300)
+        )
+    ) {
+        content()
+    }
+}
+
+// -- Sale Celebration Overlay --
+
+@Composable
+fun SaleCelebrationOverlay(
+    visible: Boolean,
+    onDismiss: () -> Unit
+) {
+    if (!visible) return
+
+    val scale by animateFloatAsState(
+        targetValue = if (visible) 1f else 0.3f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 300f),
+        label = "checkScale"
+    )
+    var textVisible by remember { mutableStateOf(false) }
+
+    LaunchedEffect(visible) {
+        if (visible) {
+            delay(300)
+            textVisible = true
+            delay(1700)
+            onDismiss()
+        }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.6f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(80.dp)
+                    .scale(scale)
+                    .clip(CircleShape)
+                    .background(Color(0xFF2D9E5C)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Check,
+                    contentDescription = "Success",
+                    tint = Color.White,
+                    modifier = Modifier.size(40.dp)
+                )
+            }
+            AnimatedVisibility(
+                visible = textVisible,
+                enter = fadeIn(tween(400))
+            ) {
+                Text(
+                    "Sale Complete!",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
     }
 }
