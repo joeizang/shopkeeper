@@ -67,6 +67,61 @@ interface SyncDao {
     @Query("UPDATE sync_queue SET retryCount = retryCount + 1 WHERE id = :id")
     suspend fun incrementRetryCount(id: Long)
 
+    @Query(
+        """
+        UPDATE sync_queue
+        SET claimToken = :claimToken,
+            claimedAtEpochMs = :claimedAtEpochMs
+        WHERE id = :id
+          AND (
+            claimToken IS NULL
+            OR claimedAtEpochMs IS NULL
+            OR claimedAtEpochMs < :staleBeforeEpochMs
+          )
+        """
+    )
+    suspend fun claimRow(
+        id: Long,
+        claimToken: String,
+        claimedAtEpochMs: Long,
+        staleBeforeEpochMs: Long
+    ): Int
+
+    @Query(
+        """
+        UPDATE sync_queue
+        SET claimToken = NULL,
+            claimedAtEpochMs = NULL
+        WHERE id = :id AND claimToken = :claimToken
+        """
+    )
+    suspend fun releaseClaim(id: Long, claimToken: String): Int
+
+    @Query(
+        """
+        UPDATE sync_queue
+        SET claimToken = NULL,
+            claimedAtEpochMs = NULL,
+            retryCount = retryCount + 1
+        WHERE id = :id AND claimToken = :claimToken
+        """
+    )
+    suspend fun releaseClaimAndIncrementRetry(id: Long, claimToken: String): Int
+
+    @Query("DELETE FROM sync_queue WHERE id = :id AND claimToken = :claimToken")
+    suspend fun deleteClaimedRow(id: Long, claimToken: String): Int
+
+    @Query(
+        """
+        UPDATE sync_queue
+        SET claimToken = NULL,
+            claimedAtEpochMs = NULL
+        WHERE claimedAtEpochMs IS NOT NULL
+          AND claimedAtEpochMs < :staleBeforeEpochMs
+        """
+    )
+    suspend fun releaseStaleClaims(staleBeforeEpochMs: Long): Int
+
     @Insert
     suspend fun addConflict(conflict: SyncConflictEntity)
 

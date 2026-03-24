@@ -287,10 +287,12 @@ fun BrickButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    icon: ImageVector? = null
+    icon: ImageVector? = null,
+    enabled: Boolean = true
 ) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .defaultMinSize(minHeight = 52.dp),

@@ -41,9 +41,12 @@ final class SyncProfileUITests: BaseUITestCase {
 
         navigateToTab("profile")
         waitAndAssert("profile.root")
-        app.swipeUp()
-        app.swipeUp()
-        XCTAssertTrue(app.buttons["profile.shopSettings.save"].waitForExistence(timeout: 10), "Shop settings save button should be visible")
+        assertTextVisible("Current Shop", timeout: 15)
+        let saveButton = app.buttons["profile.shopSettings.save"]
+        for _ in 0..<10 where !saveButton.exists || !saveButton.isHittable {
+            app.swipeUp()
+        }
+        XCTAssertTrue(saveButton.waitForExistence(timeout: 10), "Shop settings save button should be visible")
     }
 
     func testProfileViewShowsSessionsSection() {

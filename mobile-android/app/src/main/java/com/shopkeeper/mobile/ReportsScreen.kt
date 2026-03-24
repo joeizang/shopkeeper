@@ -72,6 +72,7 @@ fun ReportsScreen() {
     var expenseAmount by rememberSaveable { mutableStateOf("") }
     var expenseDate by rememberSaveable { mutableStateOf("") }
     var expenseNotes by rememberSaveable { mutableStateOf("") }
+    var isSubmittingExpense by rememberSaveable { mutableStateOf(false) }
 
     val selectedType = runCatching { ReportType.valueOf(selectedTypeName) }.getOrDefault(ReportType.Inventory)
     val showDateRange = selectedType != ReportType.Inventory
@@ -157,6 +158,7 @@ fun ReportsScreen() {
 
         scope.launch {
             isLoading = true
+            isSubmittingExpense = true
             val result = if (editingExpenseId.isBlank()) {
                 gateway.createExpense(
                     ExpenseInput(
@@ -190,6 +192,7 @@ fun ReportsScreen() {
             }.onFailure {
                 status = "Expense save failed: ${it.message.orEmpty()}"
             }
+            isSubmittingExpense = false
             isLoading = false
         }
     }
@@ -462,7 +465,8 @@ fun ReportsScreen() {
                     )
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         BrickButton(
-                            text = if (editingExpenseId.isBlank()) "Save Expense" else "Update Expense",
+                            text = if (isSubmittingExpense) "Saving..." else if (editingExpenseId.isBlank()) "Save Expense" else "Update Expense",
+                            enabled = !isSubmittingExpense,
                             onClick = { if (!isLoading) saveExpense() },
                             modifier = Modifier.weight(1f)
                         )

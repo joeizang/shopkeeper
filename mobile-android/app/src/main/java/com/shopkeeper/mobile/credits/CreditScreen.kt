@@ -34,6 +34,7 @@ import com.shopkeeper.mobile.ui.components.ScreenHeader
 import com.shopkeeper.mobile.ui.components.SectionTitle
 import com.shopkeeper.mobile.ui.components.StatusBanner
 import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
+import java.util.UUID
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -52,6 +53,8 @@ fun CreditScreen() {
     var reference by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
     var status by rememberSaveable { mutableStateOf("") }
+    var isSubmittingRepayment by rememberSaveable { mutableStateOf(false) }
+    var repaymentClientRequestId by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
 
     fun refreshCredits() {
         scope.launch {
@@ -137,6 +140,7 @@ fun CreditScreen() {
                             },
                             onClick = {
                                 saleId = option.saleId
+                                repaymentClientRequestId = UUID.randomUUID().toString()
                                 saleDropdownExpanded = false
                             }
                         )
@@ -184,13 +188,14 @@ fun CreditScreen() {
                     modifier = Modifier.fillMaxWidth().testTag(ShopkeeperTestTags.CREDITS_NOTES)
                 )
 
-                BrickButton(text = "Apply Repayment", onClick = {
+                BrickButton(text = if (isSubmittingRepayment) "Recording..." else "Apply Repayment", enabled = !isSubmittingRepayment, onClick = {
                     if (saleId.isBlank()) {
                         status = "Sale ID is required"
                         return@BrickButton
                     }
 
                     scope.launch {
+                        isSubmittingRepayment = true
                         val result = gateway.addCreditRepayment(
                             CreditRepaymentInput(
                                 saleId = saleId,
@@ -198,11 +203,15 @@ fun CreditScreen() {
                                 paymentMethodCode = paymentMethod.code,
                                 reference = reference.ifBlank { null },
                                 notes = notes.ifBlank { null }
-                            )
+                            ),
+                            clientRequestId = repaymentClientRequestId
                         )
 
+                        isSubmittingRepayment = false
                         status = result.fold(
                             onSuccess = {
+                                repaymentClientRequestId = UUID.randomUUID().toString()
+                                repaymentAmount = ""
                                 refreshCredits()
                                 "Repayment saved and outstanding balance updated."
                             },

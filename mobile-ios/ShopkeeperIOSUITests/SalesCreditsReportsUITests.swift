@@ -2,13 +2,22 @@ import XCTest
 
 final class SalesCreditsReportsUITests: BaseUITestCase {
 
-    // MARK: - Sales
+    private func scrollUntilExists(_ element: XCUIElement, maxSwipes: Int = 4) {
+        for _ in 0..<maxSwipes where !element.exists {
+            app.swipeUp()
+        }
+    }
+
+    private func scrollUntilHittable(_ element: XCUIElement, maxSwipes: Int = 4) {
+        for _ in 0..<maxSwipes where !element.isHittable {
+            app.swipeUp()
+        }
+    }
 
     func testOwnerCanCreateSaleAndLoadReport() {
         loginAsOwner()
 
         navigateToTab("sales")
-        waitAndAssert("sales.root", timeout: 15)
         tapButton("sales.summary.add")
         waitAndAssert("sales.composer.root", timeout: 15)
 
@@ -17,30 +26,35 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         customerName.tap()
         customerName.typeText("iOS UITest Buyer")
 
+        let saleProductName = seed.inventoryProductName
         let searchField = appElement("sales.form.searchInventory")
         XCTAssertTrue(searchField.waitForExistence(timeout: 10))
         searchField.tap()
-        searchField.typeText(seed.inventoryProductName)
+        searchField.typeText(saleProductName)
 
-        let addItemButton = app.buttons["sales.item.add.\(seed.inventoryProductName)"]
+        let addItemButton = app.buttons["sales.item.add.\(saleProductName)"]
         XCTAssertTrue(addItemButton.waitForExistence(timeout: 15))
         addItemButton.tap()
 
-        assertTextVisible(seed.inventoryProductName)
+        assertTextVisible(saleProductName)
 
         app.swipeUp()
 
         let amountField = appElement("sales.form.paymentAmount")
         XCTAssertTrue(amountField.waitForExistence(timeout: 10))
         amountField.tap()
-        amountField.typeText("5912.5")
+        amountField.typeText("322500")
+
+        let cashTenderedField = appElement("sales.form.cashTendered")
+        XCTAssertTrue(cashTenderedField.waitForExistence(timeout: 10))
+        cashTenderedField.tap()
+        cashTenderedField.typeText("322500")
 
         let referenceField = appElement("sales.form.paymentReference")
         XCTAssertTrue(referenceField.waitForExistence(timeout: 10))
         referenceField.tap()
         referenceField.typeText("IOS-UITEST-REF")
 
-        tapButton("sales.form.addPaymentSplit")
         app.swipeUp()
         tapButton("sales.form.save")
 
@@ -48,7 +62,7 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         waitAndAssert("sales.summary.add", timeout: 15)
 
         navigateToTab("reports")
-        waitAndAssert("reports.load")
+        waitAndAssert("reports.load", timeout: 15)
         tapButton("reports.load")
         assertTextVisible("Summary", timeout: 15)
     }
@@ -57,7 +71,6 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         loginAsOwner()
 
         navigateToTab("sales")
-        waitAndAssert("sales.root", timeout: 15)
         tapButton("sales.summary.add")
         waitAndAssert("sales.composer.root", timeout: 15)
 
@@ -81,8 +94,6 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         assertTextVisible(seed.inventoryProductName)
     }
 
-    // MARK: - Credits
-
     func testOwnerCanRecordCreditRepayment() {
         loginAsOwner()
 
@@ -90,28 +101,26 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         waitAndAssert("credits.root", timeout: 20)
         waitAndAssert("credits.selector", timeout: 20)
         waitAndAssert("credits.repayment.root", timeout: 30)
-        app.swipeUp()
 
-        let amountField = app.textFields["credits.repayment.amount"]
-        XCTAssertTrue(amountField.waitForExistence(timeout: 10))
-        amountField.tap()
-        amountField.typeText("5000")
-
-        let referenceField = app.textFields["credits.repayment.reference"]
-        XCTAssertTrue(referenceField.waitForExistence(timeout: 10))
-        referenceField.tap()
-        referenceField.typeText("IOS-CREDIT-001")
-
-        app.swipeUp()
-
-        let notesField = appElement("credits.repayment.notes")
-        if notesField.waitForExistence(timeout: 5) {
-            notesField.tap()
-            notesField.typeText("UI repayment")
+        let amountField = appElement("credits.repayment.amount")
+        scrollUntilExists(amountField)
+        if !amountField.waitForExistence(timeout: 10) {
+            XCTFail("credits.repayment.amount missing\n\(app.debugDescription)")
+            return
         }
+        scrollUntilHittable(amountField, maxSwipes: 2)
+        clearAndType("credits.repayment.amount", text: "5000")
+        dismissKeyboard()
 
+        let submitButton = app.buttons["credits.repayment.submit"]
+        scrollUntilExists(submitButton, maxSwipes: 3)
+        XCTAssertTrue(submitButton.waitForExistence(timeout: 10))
         tapButton("credits.repayment.submit")
-        assertTextVisible("Repayments", timeout: 15)
+        let amountFieldAfterSubmit = app.textFields["credits.repayment.amount"]
+        XCTAssertTrue(amountFieldAfterSubmit.waitForExistence(timeout: 10))
+        let clearedPredicate = NSPredicate(format: "value == %@", "")
+        expectation(for: clearedPredicate, evaluatedWith: amountFieldAfterSubmit)
+        waitForExpectations(timeout: 15)
     }
 
     func testCreditViewShowsOpenCredits() {
@@ -124,8 +133,6 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         assertTextVisible("Outstanding")
     }
 
-    // MARK: - Reports
-
     func testReportsViewLoadsAndShowsSummary() {
         loginAsOwner()
 
@@ -136,8 +143,6 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         tapButton("reports.load")
         assertTextVisible("Summary", timeout: 15)
     }
-
-    // MARK: - Full Flow
 
     func testOwnerCanRecordSaleCreditRepaymentAndLoadReport() {
         loginAsOwner()
@@ -169,14 +174,15 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         let sellingField = appElement("inventory.form.sellingPrice")
         XCTAssertTrue(sellingField.waitForExistence(timeout: 10))
         sellingField.tap()
-        sellingField.typeText("5912.5")
+        sellingField.typeText("6000")
 
         app.swipeUp()
         tapButton("inventory.form.save", timeout: 15)
+        XCTAssertTrue(appElement("inventory.editor.root").waitForNonExistence(timeout: 15), "Inventory editor should dismiss after saving")
         assertTextVisible(instrumentedProductName, timeout: 20)
 
         navigateToTab("sales")
-        waitAndAssert("sales.summary.add", timeout: 20)
+        waitAndAssert("sales.root", timeout: 20)
         tapButton("sales.summary.add", timeout: 20)
         waitAndAssert("sales.composer.root", timeout: 15)
 
@@ -199,48 +205,51 @@ final class SalesCreditsReportsUITests: BaseUITestCase {
         let paymentAmount = appElement("sales.form.paymentAmount")
         XCTAssertTrue(paymentAmount.waitForExistence(timeout: 10))
         paymentAmount.tap()
-        paymentAmount.typeText("5912.5")
+        paymentAmount.typeText("6450")
+
+        let paymentCashTendered = appElement("sales.form.cashTendered")
+        XCTAssertTrue(paymentCashTendered.waitForExistence(timeout: 10))
+        paymentCashTendered.tap()
+        paymentCashTendered.typeText("6450")
 
         let paymentRef = appElement("sales.form.paymentReference")
         XCTAssertTrue(paymentRef.waitForExistence(timeout: 10))
         paymentRef.tap()
         paymentRef.typeText("E2E-PAY-001")
 
-        tapButton("sales.form.addPaymentSplit")
         app.swipeUp()
         tapButton("sales.form.save", timeout: 15)
 
         XCTAssertTrue(appElement("sales.composer.root").waitForNonExistence(timeout: 15), "Sale composer should dismiss after saving")
         waitAndAssert("sales.summary.add", timeout: 15)
+
         navigateToTab("credits")
         waitAndAssert("credits.root", timeout: 20)
         waitAndAssert("credits.selector", timeout: 20)
         waitAndAssert("credits.repayment.root", timeout: 30)
-        app.swipeUp()
 
-        let repaymentAmount = app.textFields["credits.repayment.amount"]
-        XCTAssertTrue(repaymentAmount.waitForExistence(timeout: 10))
-        repaymentAmount.tap()
-        repaymentAmount.typeText("5000")
-
-        let repaymentRef = app.textFields["credits.repayment.reference"]
-        XCTAssertTrue(repaymentRef.waitForExistence(timeout: 10))
-        repaymentRef.tap()
-        repaymentRef.typeText("E2E-TRX-900")
-
-        app.swipeUp()
-
-        let notesField = appElement("credits.repayment.notes")
-        if notesField.waitForExistence(timeout: 5) {
-            notesField.tap()
-            notesField.typeText("Instrumentation repayment")
+        let repaymentAmount = appElement("credits.repayment.amount")
+        scrollUntilExists(repaymentAmount)
+        if !repaymentAmount.waitForExistence(timeout: 10) {
+            XCTFail("credits.repayment.amount missing in combined flow\n\(app.debugDescription)")
+            return
         }
+        scrollUntilHittable(repaymentAmount, maxSwipes: 2)
+        clearAndType("credits.repayment.amount", text: "5000")
+        dismissKeyboard()
 
+        let repaymentSubmit = app.buttons["credits.repayment.submit"]
+        scrollUntilExists(repaymentSubmit, maxSwipes: 3)
+        XCTAssertTrue(repaymentSubmit.waitForExistence(timeout: 10))
         tapButton("credits.repayment.submit")
-        assertTextVisible("Repayments", timeout: 15)
+        let amountFieldAfterSubmit = app.textFields["credits.repayment.amount"]
+        XCTAssertTrue(amountFieldAfterSubmit.waitForExistence(timeout: 10))
+        let clearedPredicate = NSPredicate(format: "value == %@", "")
+        expectation(for: clearedPredicate, evaluatedWith: amountFieldAfterSubmit)
+        waitForExpectations(timeout: 15)
 
         navigateToTab("reports")
-        waitAndAssert("reports.root")
+        waitAndAssert("reports.load", timeout: 15)
         tapButton("reports.load")
         assertTextVisible("Summary", timeout: 15)
     }

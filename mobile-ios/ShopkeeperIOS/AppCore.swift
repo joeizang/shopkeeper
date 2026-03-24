@@ -1135,23 +1135,9 @@ final class SessionStore: ObservableObject {
                 : nil
 
             let resolvedShops = try await loadedShops
+            let resolvedProfile = try await loadedProfile
             shops = resolvedShops
-            profile = try await loadedProfile
-            inventory = try await loadedInventoryPage?.items ?? []
-            credits = try await loadedCreditsPage?.items ?? []
-            sessions = try await loadedSessions
-            linkedIdentities = try await loadedIdentities
-            reportJobs = try await loadedReportJobs
-            reportFiles = try await loadedReportFiles
-            expenses = try await loadedExpenses
-            todaysSalesReport = try await salesReport
-            if capabilities.canManageSales {
-                recentSales = try await api.request("api/v1/sales?limit=20", accessToken: accessToken)
-                persistRecentSales()
-            } else {
-                recentSales = []
-                persistRecentSales()
-            }
+            profile = resolvedProfile
 
             let selectedShopId = auth?.shopId ?? defaults.string(forKey: "ios_shop_id")
             currentShop = resolvedShops.first(where: { $0.id == selectedShopId }) ?? resolvedShops.first
@@ -1159,8 +1145,24 @@ final class SessionStore: ObservableObject {
                 defaults.set(currentShop.id, forKey: "ios_shop_id")
             }
 
+            inventory = (try? await loadedInventoryPage?.items) ?? []
+            credits = (try? await loadedCreditsPage?.items) ?? []
+            sessions = (try? await loadedSessions) ?? []
+            linkedIdentities = (try? await loadedIdentities) ?? []
+            reportJobs = (try? await loadedReportJobs) ?? []
+            reportFiles = (try? await loadedReportFiles) ?? []
+            expenses = (try? await loadedExpenses) ?? []
+            todaysSalesReport = try? await salesReport
+            if capabilities.canManageSales {
+                recentSales = (try? await api.request("api/v1/sales?limit=20", accessToken: accessToken)) ?? []
+                persistRecentSales()
+            } else {
+                recentSales = []
+                persistRecentSales()
+            }
+
             if capabilities.canManageStaff, let shop = currentShop {
-                staffMembers = try await api.request("api/v1/shops/\(shop.id)/staff", accessToken: accessToken)
+                staffMembers = (try? await api.request("api/v1/shops/\(shop.id)/staff", accessToken: accessToken)) ?? []
             } else {
                 staffMembers = []
             }
@@ -1169,7 +1171,7 @@ final class SessionStore: ObservableObject {
 
     func refreshInventory() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageInventory else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             let page: PaginatedResponse<InventoryItemResponse> = try await api.request("api/v1/inventory/items", accessToken: accessToken)
             inventory = page.items
         }
@@ -1498,12 +1500,16 @@ final class SessionStore: ObservableObject {
                 lastCustomerReceipt = canonicalBundle?.customer ?? provisionalBundle?.customer
                 lastOwnerReceipt = canonicalBundle?.owner ?? provisionalBundle?.owner
                 createdBundle = canonicalBundle ?? provisionalBundle
-                await refreshInventory()
-                await refreshCredits()
-                await refreshTodaysSales()
                 statusMessage = (createdBundle?.hasFailures ?? false)
                     ? "Sale \(response.saleNumber) created. One or more receipts need regeneration."
                     : "Sale \(response.saleNumber) created."
+                Task { [weak self] in
+                    guard let self else { return }
+                    await self.refreshInventory()
+                    await self.refreshCredits()
+                    await self.refreshTodaysSales()
+                    await self.refreshRecentSales()
+                }
             } catch {
                 receiptStore.remove(localSaleId: localSaleId)
                 lastCustomerReceipt = nil
@@ -1580,7 +1586,7 @@ final class SessionStore: ObservableObject {
 
     func refreshRecentSales(limit: Int = 20) async {
         guard let accessToken = auth?.accessToken, capabilities.canManageSales else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             let sales: [SaleDetailResponse] = try await api.request("api/v1/sales?limit=\(limit)", accessToken: accessToken)
             recentSales = sales
             persistRecentSales()
@@ -1589,7 +1595,7 @@ final class SessionStore: ObservableObject {
 
     func refreshTodaysSales() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageSales else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             todaysSalesReport = try await api.request(
                 "api/v1/reports/sales?from=\(isoDay(Date()))&to=\(isoDay(Date()))",
                 accessToken: accessToken
@@ -1599,7 +1605,7 @@ final class SessionStore: ObservableObject {
 
     func refreshCredits() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageSales else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             let page: PaginatedResponse<CreditAccountView> = try await api.request("api/v1/credits", accessToken: accessToken)
             credits = page.items
         }
@@ -1607,7 +1613,7 @@ final class SessionStore: ObservableObject {
 
     func loadCreditDetail(saleId: String) async {
         guard let accessToken = auth?.accessToken else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             selectedCreditDetail = try await api.request("api/v1/credits/\(saleId)", accessToken: accessToken)
         }
     }
@@ -1626,10 +1632,14 @@ final class SessionStore: ObservableObject {
                 ),
                 accessToken: accessToken
             )
-            await refreshCredits()
-            await loadCreditDetail(saleId: saleId)
-            await refreshTodaysSales()
             statusMessage = "Repayment recorded."
+            Task { [weak self] in
+                guard let self else { return }
+                await self.refreshCredits()
+                await self.loadCreditDetail(saleId: saleId)
+                await self.refreshTodaysSales()
+                await self.refreshRecentSales()
+            }
         }
     }
 
@@ -1676,7 +1686,7 @@ final class SessionStore: ObservableObject {
 
     func refreshReportArtifacts() async {
         guard let accessToken = auth?.accessToken, capabilities.canViewReports else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             reportJobs = try await api.request("api/v1/reports/jobs", accessToken: accessToken)
             reportFiles = try await api.request("api/v1/reports/files", accessToken: accessToken)
         }
@@ -1726,7 +1736,7 @@ final class SessionStore: ObservableObject {
 
     func refreshExpenses() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageExpenses else { return }
-        await perform { [self] in
+        await performSilently { [self] in
             expenses = try await api.request("api/v1/expenses", accessToken: accessToken)
         }
     }
@@ -1918,6 +1928,14 @@ final class SessionStore: ObservableObject {
             try await operation()
         } catch {
             statusMessage = error.localizedDescription
+        }
+    }
+
+    private func performSilently(_ operation: @escaping () async throws -> Void) async {
+        do {
+            try await operation()
+        } catch {
+            print("[Shopkeeper] Background refresh failed: \(error.localizedDescription)")
         }
     }
 }

@@ -14,7 +14,7 @@ import androidx.room.RoomDatabase
         SyncConflictEntity::class,
         PendingItemPhotoEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class ShopkeeperDatabase : RoomDatabase() {

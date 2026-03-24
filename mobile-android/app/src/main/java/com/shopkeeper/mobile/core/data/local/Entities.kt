@@ -62,7 +62,10 @@ data class SyncQueueEntity(
     val payloadJson: String,
     val rowVersionBase64: String?,
     val enqueuedAtUtcIso: String,
-    val retryCount: Int = 0
+    val retryCount: Int = 0,
+    val clientRequestId: String? = null,
+    val claimToken: String? = null,
+    val claimedAtEpochMs: Long? = null
 )
 
 @Entity(tableName = "sync_conflicts")

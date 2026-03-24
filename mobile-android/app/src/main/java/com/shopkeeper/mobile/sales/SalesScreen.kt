@@ -53,6 +53,7 @@ import com.shopkeeper.mobile.ui.components.StatusBanner
 import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.UUID
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -91,7 +92,11 @@ fun SalesScreen() {
     var status by rememberSaveable { mutableStateOf("") }
     var lastSale by remember { mutableStateOf<RecordedSale?>(null) }
     var isCreatingSale by rememberSaveable { mutableStateOf(false) }
+    var isSubmittingSale by rememberSaveable { mutableStateOf(false) }
+    var saleClientRequestId by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
     var showCelebration by remember { mutableStateOf(false) }
+    var isSubmittingPayment by rememberSaveable { mutableStateOf(false) }
+    var paymentClientRequestId by rememberSaveable { mutableStateOf(UUID.randomUUID().toString()) }
     var selectedExistingSaleId by rememberSaveable { mutableStateOf("") }
     var existingPaymentAmountDraft by rememberSaveable { mutableStateOf("") }
     var existingPaymentRefDraft by rememberSaveable { mutableStateOf("") }
@@ -305,6 +310,7 @@ fun SalesScreen() {
                                                 selectedExistingSaleId = ""
                                             } else {
                                                 selectedExistingSaleId = sale.id
+                                                paymentClientRequestId = UUID.randomUUID().toString()
                                                 existingPaymentAmountDraft = ""
                                                 existingPaymentRefDraft = ""
                                                 existingPaymentCashTenderedDraft = ""
@@ -366,7 +372,8 @@ fun SalesScreen() {
                                 modifier = Modifier.weight(1f)
                             )
                             BrickButton(
-                                text = "Save Payment",
+                                text = if (isSubmittingPayment) "Saving..." else "Save Payment",
+                                enabled = !isSubmittingPayment,
                                 onClick = {
                                     scope.launch {
                                         val amount = existingPaymentAmountDraft.toDoubleOrNull()
@@ -379,12 +386,14 @@ fun SalesScreen() {
                                             status = "Cash received must be at least the payment amount."
                                             return@launch
                                         }
+                                        isSubmittingPayment = true
                                         val result = gateway.addSalePayment(
                                             saleId = selectedExistingSale.id,
                                             amount = amount,
                                             paymentMethodCode = existingPaymentMethodDraft.code,
                                             paymentReference = existingPaymentRefDraft.ifBlank { null },
-                                            cashTendered = if (existingPaymentMethodDraft == PaymentMethodOption.Cash) cashTendered else null
+                                            cashTendered = if (existingPaymentMethodDraft == PaymentMethodOption.Cash) cashTendered else null,
+                                            clientRequestId = paymentClientRequestId
                                         )
                                         status = result.fold(
                                             onSuccess = {
@@ -393,10 +402,15 @@ fun SalesScreen() {
                                                 existingPaymentAmountDraft = ""
                                                 existingPaymentRefDraft = ""
                                                 existingPaymentCashTenderedDraft = ""
+                                                paymentClientRequestId = UUID.randomUUID().toString()
+                                                isSubmittingPayment = false
                                                 refreshSummary()
                                                 "Payment added and receipts regenerated."
                                             },
-                                            onFailure = { "Could not add payment: ${it.message.orEmpty()}" }
+                                            onFailure = {
+                                                isSubmittingPayment = false
+                                                "Could not add payment: ${it.message.orEmpty()}"
+                                            }
                                         )
                                     }
                                 },
@@ -774,7 +788,8 @@ fun SalesScreen() {
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 BrickButton(
-                    text = "Save Sale",
+                    text = if (isSubmittingSale) "Saving..." else "Save Sale",
+                    enabled = !isSubmittingSale,
                     onClick = {
                         if (saleLines.isEmpty()) {
                             status = "Add at least one line item."
@@ -815,7 +830,8 @@ fun SalesScreen() {
                                 cashierName = cashierName
                             )
 
-                            val result = gateway.recordSale(input)
+                            isSubmittingSale = true
+                            val result = gateway.recordSale(input, clientRequestId = saleClientRequestId)
                             status = result.fold(
                                 onSuccess = {
                                     lastSale = it
@@ -833,10 +849,15 @@ fun SalesScreen() {
                                     dueDateUtc = ""
                                     applyShopDiscount = false
                                     showCelebration = true
+                                    saleClientRequestId = UUID.randomUUID().toString()
+                                    isSubmittingSale = false
                                     refreshSummary()
                                     if (it.synced) "Sale saved and synced (${it.saleNumber})" else "Sale saved locally, sync pending"
                                 },
-                                onFailure = { "Sale failed: ${it.message.orEmpty()}" }
+                                onFailure = {
+                                    isSubmittingSale = false
+                                    "Sale failed: ${it.message.orEmpty()}"
+                                }
                             )
                         }
                     },

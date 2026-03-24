@@ -65,9 +65,11 @@ import com.shopkeeper.mobile.receipts.ReceiptSourcePayload
 import com.shopkeeper.mobile.receipts.ReceiptVersions
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
 import retrofit2.HttpException
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 import java.io.File
 import java.time.Instant
@@ -88,6 +90,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }.getOrElse {
             context.createDeviceProtectedStorageContext().getSharedPreferences(name, Context.MODE_PRIVATE)
         }
+
+    private val paymentMutexes = ConcurrentHashMap<String, Mutex>()
 
     private val db = ShopkeeperDatabase.get(appContext)
     private val sessionManager = AuthSessionManager(appContext)
@@ -622,6 +626,45 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
+    suspend fun getInventoryDuplicateWarnings(
+        editingItemId: String?,
+        productName: String,
+        modelNumber: String?,
+        serialNumber: String?
+    ): List<InventoryDuplicateWarning> = withContext(Dispatchers.IO) {
+        val items = db.inventoryDao().getAll()
+            .filter { it.id != editingItemId }
+        val warnings = mutableListOf<InventoryDuplicateWarning>()
+        val normalizedName = productName.trim().lowercase()
+        val normalizedModel = modelNumber?.trim()?.lowercase()
+        val normalizedSerial = serialNumber?.trim()?.lowercase()
+
+        for (item in items) {
+            if (!normalizedSerial.isNullOrBlank() &&
+                item.serialNumber?.trim()?.lowercase() == normalizedSerial
+            ) {
+                warnings.add(
+                    InventoryDuplicateWarning(
+                        reason = "An item with serial number \"${item.serialNumber}\" already exists.",
+                        existingProductName = item.productName
+                    )
+                )
+            }
+            if (!normalizedModel.isNullOrBlank() &&
+                item.modelNumber?.trim()?.lowercase() == normalizedModel &&
+                item.productName.trim().lowercase() == normalizedName
+            ) {
+                warnings.add(
+                    InventoryDuplicateWarning(
+                        reason = "An item with the same name and model number already exists.",
+                        existingProductName = item.productName
+                    )
+                )
+            }
+        }
+        warnings.distinctBy { it.reason }
+    }
+
     suspend fun saveInventoryItem(input: NewInventoryInput): Result<InventoryItemEntity> = withContext(Dispatchers.IO) {
         try {
             val now = Instant.now().toString()
@@ -749,7 +792,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
-    suspend fun recordSale(input: NewSaleInput): Result<RecordedSale> = withContext(Dispatchers.IO) {
+    suspend fun recordSale(input: NewSaleInput, clientRequestId: String? = null): Result<RecordedSale> = withContext(Dispatchers.IO) {
         try {
             val now = Instant.now().toString()
             val localSaleId = UUID.randomUUID().toString()
@@ -795,7 +838,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                             cashTendered = it.cashTendered
                         )
                     }
-                    .ifEmpty { null }
+                    .ifEmpty { null },
+                clientRequestId = clientRequestId
             )
 
             db.salesDao().upsert(
@@ -862,7 +906,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     operation = QueueOperation.Create,
                     payloadJson = saleCreateAdapter.toJson(request),
                     rowVersionBase64 = null,
-                    enqueuedAtUtcIso = now
+                    enqueuedAtUtcIso = now,
+                    clientRequestId = clientRequestId
                 )
             )
 
@@ -879,8 +924,13 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         amount: Double,
         paymentMethodCode: Int,
         paymentReference: String?,
-        cashTendered: Double?
+        cashTendered: Double?,
+        clientRequestId: String? = null
     ): Result<RecordedSale> = withContext(Dispatchers.IO) {
+        val mutex = paymentMutexes.getOrPut(saleId) { Mutex() }
+        if (!mutex.tryLock()) {
+            return@withContext Result.failure(IllegalStateException("Payment already in progress for this sale."))
+        }
         try {
             require(amount > 0.0) { "Payment amount must be greater than zero." }
             if (paymentMethodCode == PaymentMethodOption.Cash.code) {
@@ -895,7 +945,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                         amount = amount,
                         reference = paymentReference,
                         cashTendered = cashTendered,
-                        note = null
+                        note = null,
+                        clientRequestId = clientRequestId
                     )
                 )
             }
@@ -920,8 +971,17 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             persistReceiptArtifacts(canonicalSource, ReceiptVersions.Canonical)
             val receipts = db.receiptDao().getByLocalSale(localSaleId)
             Result.success(buildRecordedSaleFromReceipts(localSaleId, receipts, canonicalSource))
+        } catch (ex: HttpException) {
+            if (ex.code() == 409) {
+                Result.failure(IllegalStateException("Payment is being processed, please wait."))
+            } else {
+                Result.failure(ex)
+            }
         } catch (ex: Exception) {
             Result.failure(ex)
+        } finally {
+            mutex.unlock()
+            paymentMutexes.remove(saleId)
         }
     }
 
@@ -945,7 +1005,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }
     }
 
-    suspend fun addCreditRepayment(input: CreditRepaymentInput): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun addCreditRepayment(input: CreditRepaymentInput, clientRequestId: String? = null): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             val amount = input.amount.coerceAtLeast(0.0)
             require(amount > 0.0) { "Repayment amount must be greater than zero." }
@@ -972,7 +1032,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     amount = amount,
                     method = input.paymentMethodCode,
                     reference = input.reference,
-                    notes = input.notes
+                    notes = input.notes,
+                    clientRequestId = clientRequestId
                 )
             )
 
@@ -983,7 +1044,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     operation = QueueOperation.Create,
                     payloadJson = repaymentAdapter.toJson(payload),
                     rowVersionBase64 = null,
-                    enqueuedAtUtcIso = now
+                    enqueuedAtUtcIso = now,
+                    clientRequestId = clientRequestId
                 )
             )
 
@@ -1021,15 +1083,23 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     }
 
     suspend fun runSyncOnce(): SyncRunSummary = withContext(Dispatchers.IO) {
+        val nowMs = System.currentTimeMillis()
+        val staleBeforeMs = nowMs - SYNC_CLAIM_TIMEOUT_MS
+        db.syncDao().releaseStaleClaims(staleBeforeMs)
+
         val pending = db.syncDao().getPending(limit = 100)
         if (pending.isEmpty()) {
             val pullApplied = runCatching { pullAndApplyServerChanges() }.getOrElse { 0 }
             return@withContext SyncRunSummary(pullApplied, 0, 0)
         }
 
+        val runClaimToken = UUID.randomUUID().toString()
+
         val activePending = pending.filter { it.retryCount < MAX_SYNC_RETRIES }
         val exhaustedPending = pending.filter { it.retryCount >= MAX_SYNC_RETRIES }
         exhaustedPending.forEach { change ->
+            val claimed = db.syncDao().claimRow(change.id, runClaimToken, nowMs, staleBeforeMs)
+            if (claimed == 0) return@forEach
             recordSyncConflict(
                 entityName = change.entityName,
                 entityId = change.entityId,
@@ -1037,7 +1107,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 localPayloadJson = change.payloadJson,
                 conflictReason = "Sync retry limit reached. Review and resolve manually."
             )
-            db.syncDao().deleteById(change.id)
+            db.syncDao().deleteClaimedRow(change.id, runClaimToken)
         }
 
         if (activePending.isEmpty()) {
@@ -1049,7 +1119,12 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         var conflicts = exhaustedPending.size
         var transientFailures = 0
 
+        val isFinancialEntity = setOf(QueueEntity.SaleCreate, QueueEntity.CreditRepaymentCreate)
+
         activePending.forEach { change ->
+            val claimed = db.syncDao().claimRow(change.id, runClaimToken, nowMs, staleBeforeMs)
+            if (claimed == 0) return@forEach
+
             try {
                 val acceptedChange = when (change.entityName) {
                     QueueEntity.InventoryCreate -> {
@@ -1067,14 +1142,19 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     else -> pushGenericSync(change)
                 }
                 if (acceptedChange) {
-                    db.syncDao().deleteById(change.id)
+                    db.syncDao().deleteClaimedRow(change.id, runClaimToken)
                     accepted++
                 } else {
-                    db.syncDao().deleteById(change.id)
+                    db.syncDao().deleteClaimedRow(change.id, runClaimToken)
                     conflicts++
                 }
             } catch (httpEx: HttpException) {
-                if (httpEx.code() == 409) {
+                if (httpEx.code() == 409 && change.entityName in isFinancialEntity) {
+                    // Financial idempotency 409: request is still in-progress on the server.
+                    // Release claim without incrementing retry — let the next sync cycle try again.
+                    db.syncDao().releaseClaim(change.id, runClaimToken)
+                } else if (httpEx.code() == 409) {
+                    // Non-financial 409: true data conflict (e.g. inventory version mismatch)
                     recordSyncConflict(
                         entityName = change.entityName,
                         entityId = change.entityId,
@@ -1085,7 +1165,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                     if (change.entityName == QueueEntity.InventoryCreate) {
                         db.pendingItemPhotoDao().deleteByLocalItem(change.entityId)
                     }
-                    db.syncDao().deleteById(change.id)
+                    db.syncDao().deleteClaimedRow(change.id, runClaimToken)
                     conflicts++
                 } else {
                     transientFailures++
@@ -1097,10 +1177,10 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                             localPayloadJson = change.payloadJson,
                             conflictReason = "Sync failed repeatedly and was moved to conflicts."
                         )
-                        db.syncDao().deleteById(change.id)
+                        db.syncDao().deleteClaimedRow(change.id, runClaimToken)
                         conflicts++
                     } else {
-                        db.syncDao().incrementRetryCount(change.id)
+                        db.syncDao().releaseClaimAndIncrementRetry(change.id, runClaimToken)
                     }
                 }
             } catch (_: Exception) {
@@ -1113,10 +1193,10 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                         localPayloadJson = change.payloadJson,
                         conflictReason = "Sync failed repeatedly and was moved to conflicts."
                     )
-                    db.syncDao().deleteById(change.id)
+                    db.syncDao().deleteClaimedRow(change.id, runClaimToken)
                     conflicts++
                 } else {
-                    db.syncDao().incrementRetryCount(change.id)
+                    db.syncDao().releaseClaimAndIncrementRetry(change.id, runClaimToken)
                 }
             }
         }
@@ -1154,7 +1234,10 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         val payload = saleCreateAdapter.fromJson(change.payloadJson)
             ?: error("Invalid sale payload")
 
-        val response = withAuthRetry { api.createSale(payload) }
+        val requestWithId = payload.copy(
+            clientRequestId = change.clientRequestId ?: payload.clientRequestId
+        )
+        val response = withAuthRetry { api.createSale(requestWithId) }
         regenerateCanonicalReceiptArtifacts(change.entityId, response.id, response.saleNumber)
 
         db.salesDao().deleteById(change.entityId)
@@ -1165,8 +1248,11 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         val payload = repaymentAdapter.fromJson(change.payloadJson)
             ?: error("Invalid credit repayment payload")
 
+        val requestWithId = payload.request.copy(
+            clientRequestId = change.clientRequestId ?: payload.request.clientRequestId
+        )
         withAuthRetry {
-            api.addCreditRepayment(payload.saleId, payload.request)
+            api.addCreditRepayment(payload.saleId, requestWithId)
         }
     }
 
@@ -1764,6 +1850,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     }
 
     companion object {
+        private const val SYNC_CLAIM_TIMEOUT_MS = 2 * 60_000L
+
         @Volatile
         private var instance: ShopkeeperDataGateway? = null
 
@@ -2036,6 +2124,8 @@ data class CreditRepaymentRecord(
     val notes: String?,
     val createdAtUtc: String
 )
+
+data class InventoryDuplicateWarning(val reason: String, val existingProductName: String)
 
 data class SyncRunSummary(
     val accepted: Int,

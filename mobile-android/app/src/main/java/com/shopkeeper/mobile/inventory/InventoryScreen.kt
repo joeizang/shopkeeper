@@ -65,6 +65,7 @@ fun InventoryScreen() {
     var isUsed by rememberSaveable { mutableStateOf(false) }
     var capturedPhotoUris by rememberSaveable { mutableStateOf<List<String>>(emptyList()) }
     var status by rememberSaveable { mutableStateOf("") }
+    var isSubmittingItem by rememberSaveable { mutableStateOf(false) }
     var activeCameraActionName by rememberSaveable { mutableStateOf("") }
     val activeCameraAction = CameraAction.entries.firstOrNull { it.name == activeCameraActionName }
 
@@ -307,7 +308,8 @@ fun InventoryScreen() {
             )
 
             BrickButton(
-                text = if (isEditing) "Update Inventory Item" else "Save Inventory Item",
+                text = if (isSubmittingItem) "Saving..." else if (isEditing) "Update Inventory Item" else "Save Inventory Item",
+                enabled = !isSubmittingItem,
                 onClick = {
                     if (productName.isBlank()) {
                         status = "Product name is required"
@@ -315,6 +317,7 @@ fun InventoryScreen() {
                     }
 
                     scope.launch {
+                        isSubmittingItem = true
                         val input = NewInventoryInput(
                             productName = productName,
                             modelNumber = extractedModel.ifBlank { null },
@@ -335,6 +338,7 @@ fun InventoryScreen() {
                             gateway.saveInventoryItem(input).map { Unit }
                         }
 
+                        isSubmittingItem = false
                         status = result.fold(
                             onSuccess = {
                                 val action = if (isEditing) "Updated" else "Saved"

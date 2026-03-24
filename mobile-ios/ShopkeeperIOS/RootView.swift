@@ -92,6 +92,13 @@ struct RootView: View {
                 .padding(.horizontal, SKSpacing.lg)
                 .padding(.top, SKSpacing.sm)
                 .transition(.move(edge: .top).combined(with: .opacity))
+                .onTapGesture { sessionStore.statusMessage = nil }
+                .task(id: status) {
+                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                    if sessionStore.statusMessage == status {
+                        withAnimation { sessionStore.statusMessage = nil }
+                    }
+                }
             }
         }
     }

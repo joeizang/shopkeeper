@@ -181,7 +181,8 @@ data class CreateSaleRequest(
     val isCredit: Boolean,
     val dueDateUtc: String?,
     val lines: List<SaleLineRequest>,
-    val initialPayments: List<SalePaymentRequest>?
+    val initialPayments: List<SalePaymentRequest>?,
+    val clientRequestId: String? = null
 )
 
 data class CreateSaleResponse(
@@ -196,7 +197,8 @@ data class AddSalePaymentRequest(
     val amount: Double,
     val reference: String?,
     val cashTendered: Double?,
-    val note: String? = null
+    val note: String? = null,
+    val clientRequestId: String? = null
 )
 
 data class SaleDetailLineDto(
@@ -305,7 +307,8 @@ data class CreditRepaymentRequest(
     val amount: Double,
     val method: Int,
     val reference: String?,
-    val notes: String?
+    val notes: String?,
+    val clientRequestId: String? = null
 )
 
 data class CreditAccountViewDto(
