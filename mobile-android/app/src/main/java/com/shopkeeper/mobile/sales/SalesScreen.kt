@@ -36,8 +36,8 @@ import com.shopkeeper.mobile.core.data.ShopSummary
 import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
 import com.shopkeeper.mobile.core.data.local.InventoryItemEntity
 import com.shopkeeper.mobile.core.data.local.SaleEntity
-import com.shopkeeper.mobile.receipts.ReceiptPdfGenerator
 import com.shopkeeper.mobile.receipts.shareReceiptPdf
+import com.shopkeeper.mobile.receipts.openReceiptPdf
 import com.shopkeeper.mobile.ui.components.AccentCard
 import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.DatePickerField
@@ -76,6 +76,7 @@ fun SalesScreen() {
     var selectedItemQuantity by rememberSaveable { mutableStateOf("1") }
     var paymentAmountDraft by rememberSaveable { mutableStateOf("") }
     var paymentRefDraft by rememberSaveable { mutableStateOf("") }
+    var paymentCashTenderedDraft by rememberSaveable { mutableStateOf("") }
     var paymentMethodCodeDraft by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
     val paymentMethodDraft = PaymentMethodOption.fromCode(paymentMethodCodeDraft)
     var saleLines by rememberSaveable(stateSaver = UiSaleLinesSaver) { mutableStateOf<List<UiSaleLine>>(emptyList()) }
@@ -86,10 +87,17 @@ fun SalesScreen() {
     var inventory by remember { mutableStateOf<List<InventoryItemEntity>>(emptyList()) }
     var todayCompletedSales by remember { mutableStateOf<List<SaleEntity>>(emptyList()) }
     var shopSummary by remember { mutableStateOf<ShopSummary?>(null) }
+    var cashierName by remember { mutableStateOf("Shop Staff") }
     var status by rememberSaveable { mutableStateOf("") }
     var lastSale by remember { mutableStateOf<RecordedSale?>(null) }
     var isCreatingSale by rememberSaveable { mutableStateOf(false) }
     var showCelebration by remember { mutableStateOf(false) }
+    var selectedExistingSaleId by rememberSaveable { mutableStateOf("") }
+    var existingPaymentAmountDraft by rememberSaveable { mutableStateOf("") }
+    var existingPaymentRefDraft by rememberSaveable { mutableStateOf("") }
+    var existingPaymentCashTenderedDraft by rememberSaveable { mutableStateOf("") }
+    var existingPaymentMethodCodeDraft by rememberSaveable { mutableStateOf(PaymentMethodOption.Cash.code) }
+    val existingPaymentMethodDraft = PaymentMethodOption.fromCode(existingPaymentMethodCodeDraft)
 
     fun refreshSummary() {
         scope.launch {
@@ -100,6 +108,8 @@ fun SalesScreen() {
             gateway.getCurrentShop()
                 .onSuccess { shopSummary = it }
                 .onFailure { status = "Could not load shop settings: ${it.message.orEmpty()}" }
+            gateway.getAccountProfile()
+                .onSuccess { cashierName = it.fullName.ifBlank { "Shop Staff" } }
         }
     }
 
@@ -138,13 +148,26 @@ fun SalesScreen() {
             return
         }
 
+        val cashTendered = if (paymentMethodDraft == PaymentMethodOption.Cash) {
+            val tendered = paymentCashTenderedDraft.toDoubleOrNull()
+            if (tendered == null || tendered < amount) {
+                status = "Cash received must be at least the split amount."
+                return
+            }
+            tendered
+        } else {
+            null
+        }
+
         salePayments = salePayments + UiSalePayment(
             amount = amount,
             paymentMethodCode = paymentMethodDraft.code,
-            paymentReference = paymentRefDraft.ifBlank { null }
+            paymentReference = paymentRefDraft.ifBlank { null },
+            cashTendered = cashTendered
         )
         paymentAmountDraft = ""
         paymentRefDraft = ""
+        paymentCashTenderedDraft = ""
         paymentMethodCodeDraft = PaymentMethodOption.Cash.code
         status = "Payment split added."
     }
@@ -187,6 +210,21 @@ fun SalesScreen() {
     val totalAmount = taxableBase + vatAmount
     val paidAmount = salePayments.sumOf { it.amount }
     val outstandingAmount = (totalAmount - paidAmount).coerceAtLeast(0.0)
+    val cashDraftAmount = paymentAmountDraft.toDoubleOrNull()
+    val cashDraftTendered = paymentCashTenderedDraft.toDoubleOrNull()
+    val splitChangeDue = if (paymentMethodDraft == PaymentMethodOption.Cash && cashDraftAmount != null && cashDraftAmount > 0.0 && cashDraftTendered != null) {
+        (cashDraftTendered - cashDraftAmount).coerceAtLeast(0.0)
+    } else {
+        null
+    }
+    val selectedExistingSale = todayCompletedSales.firstOrNull { it.id == selectedExistingSaleId }
+    val existingCashDraftAmount = existingPaymentAmountDraft.toDoubleOrNull()
+    val existingCashDraftTendered = existingPaymentCashTenderedDraft.toDoubleOrNull()
+    val existingSplitChangeDue = if (existingPaymentMethodDraft == PaymentMethodOption.Cash && existingCashDraftAmount != null && existingCashDraftAmount > 0.0 && existingCashDraftTendered != null) {
+        (existingCashDraftTendered - existingCashDraftAmount).coerceAtLeast(0.0)
+    } else {
+        null
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
     ScreenColumn {
@@ -229,50 +267,195 @@ fun SalesScreen() {
             )
 
             if (todayCompletedSales.isEmpty()) {
-                Text("No completed sales yet today.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("No sales recorded yet today.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else {
-                SectionTitle(title = "Completed sales")
+                SectionTitle(title = "Today's sales")
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     todayCompletedSales.take(20).forEach { sale ->
                         AccentCard(modifier = Modifier.fillMaxWidth()) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(14.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                                    Text(sale.saleNumber, style = MaterialTheme.typography.titleMedium)
-                                    Text(formatSaleTime(sale.updatedAtUtcIso), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                        Text(sale.saleNumber, style = MaterialTheme.typography.titleMedium)
+                                        Text(formatSaleTime(sale.updatedAtUtcIso), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            "Outstanding NGN ${"%.2f".format(sale.outstandingAmount)}",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        "NGN ${"%.2f".format(sale.totalAmount)}",
+                                        color = MaterialTheme.colorScheme.secondary,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
                                 }
-                                Text(
-                                    "NGN ${"%.2f".format(sale.totalAmount)}",
-                                    color = MaterialTheme.colorScheme.secondary,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
+                                if (sale.outstandingAmount > 0.0 && !sale.saleNumber.startsWith("LOCAL-")) {
+                                    SoftButton(
+                                        text = if (selectedExistingSaleId == sale.id) "Hide Payment Form" else "Add Payment",
+                                        onClick = {
+                                            if (selectedExistingSaleId == sale.id) {
+                                                selectedExistingSaleId = ""
+                                            } else {
+                                                selectedExistingSaleId = sale.id
+                                                existingPaymentAmountDraft = ""
+                                                existingPaymentRefDraft = ""
+                                                existingPaymentCashTenderedDraft = ""
+                                                existingPaymentMethodCodeDraft = PaymentMethodOption.Cash.code
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
                             }
                         }
                     }
                 }
             }
 
-            if (lastSale != null) {
-                BrickButton(
-                    text = "Share Last Receipt",
-                    onClick = {
-                        val sale = lastSale ?: return@BrickButton
-                        val generator = ReceiptPdfGenerator(context)
-                        val pdfFile: File = generator.generateSampleReceipt(
-                            saleNumber = sale.saleNumber,
-                            customerName = customerName,
-                            totalAmount = sale.totalAmount,
-                            paymentReference = salePayments.firstOrNull()?.paymentReference
+            if (selectedExistingSale != null) {
+                SectionTitle(title = "Add Payment", subtitle = selectedExistingSale.saleNumber)
+                AccentCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(14.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        PaymentMethodDropdown(
+                            selected = existingPaymentMethodDraft,
+                            onSelected = { existingPaymentMethodCodeDraft = it.code }
                         )
-                        shareReceiptPdf(context, pdfFile)
+                        OutlinedTextField(
+                            value = existingPaymentAmountDraft,
+                            onValueChange = { existingPaymentAmountDraft = it },
+                            label = { Text("Amount") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        if (existingPaymentMethodDraft == PaymentMethodOption.Cash) {
+                            OutlinedTextField(
+                                value = existingPaymentCashTenderedDraft,
+                                onValueChange = { existingPaymentCashTenderedDraft = it },
+                                label = { Text("Cash received") },
+                                modifier = Modifier.fillMaxWidth().testTag("sales.existing.cashTendered")
+                            )
+                            if (existingSplitChangeDue != null) {
+                                Text(
+                                    text = "Change due: NGN ${"%.2f".format(existingSplitChangeDue)}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        OutlinedTextField(
+                            value = existingPaymentRefDraft,
+                            onValueChange = { existingPaymentRefDraft = it },
+                            label = { Text("Reference") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SoftButton(
+                                text = "Cancel",
+                                onClick = { selectedExistingSaleId = "" },
+                                modifier = Modifier.weight(1f)
+                            )
+                            BrickButton(
+                                text = "Save Payment",
+                                onClick = {
+                                    scope.launch {
+                                        val amount = existingPaymentAmountDraft.toDoubleOrNull()
+                                        val cashTendered = existingPaymentCashTenderedDraft.toDoubleOrNull()
+                                        if (amount == null || amount <= 0.0) {
+                                            status = "Enter a valid payment amount."
+                                            return@launch
+                                        }
+                                        if (existingPaymentMethodDraft == PaymentMethodOption.Cash && (cashTendered == null || cashTendered < amount)) {
+                                            status = "Cash received must be at least the payment amount."
+                                            return@launch
+                                        }
+                                        val result = gateway.addSalePayment(
+                                            saleId = selectedExistingSale.id,
+                                            amount = amount,
+                                            paymentMethodCode = existingPaymentMethodDraft.code,
+                                            paymentReference = existingPaymentRefDraft.ifBlank { null },
+                                            cashTendered = if (existingPaymentMethodDraft == PaymentMethodOption.Cash) cashTendered else null
+                                        )
+                                        status = result.fold(
+                                            onSuccess = {
+                                                lastSale = it
+                                                selectedExistingSaleId = ""
+                                                existingPaymentAmountDraft = ""
+                                                existingPaymentRefDraft = ""
+                                                existingPaymentCashTenderedDraft = ""
+                                                refreshSummary()
+                                                "Payment added and receipts regenerated."
+                                            },
+                                            onFailure = { "Could not add payment: ${it.message.orEmpty()}" }
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (lastSale != null) {
+                val sale = lastSale!!
+                BrickButton(
+                    text = "Share Customer Receipt",
+                    onClick = {
+                        val path = sale.customerReceiptPath
+                        if (path.isNullOrBlank()) {
+                            status = "Customer receipt is not ready yet."
+                        } else {
+                            shareReceiptPdf(context, File(path))
+                        }
                     },
                     modifier = Modifier.fillMaxWidth(),
                     icon = Icons.Outlined.Share
                 )
+
+                if (capabilities.canViewReports) {
+                    SoftButton(
+                        text = "View Owner Receipt",
+                        onClick = {
+                            val path = sale.ownerReceiptPath
+                            if (path.isNullOrBlank()) {
+                                status = "Owner receipt is not ready yet."
+                            } else {
+                                openReceiptPdf(context, File(path))
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                if (sale.receiptGenerationFailed) {
+                    SoftButton(
+                        text = "Retry Receipt Generation",
+                        onClick = {
+                            scope.launch {
+                                val retried = gateway.retryReceiptGeneration(sale.localSaleId)
+                                status = retried.fold(
+                                    onSuccess = {
+                                        lastSale = it
+                                        if (it.receiptGenerationFailed) "Receipt generation is still incomplete." else "Receipt generation retried successfully."
+                                    },
+                                    onFailure = { "Receipt retry failed: ${it.message.orEmpty()}" }
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
             }
         } else {
             SectionTitle(
@@ -495,9 +678,30 @@ fun SalesScreen() {
 
             PaymentMethodDropdown(
                 selected = paymentMethodDraft,
-                onSelected = { paymentMethodCodeDraft = it.code },
+                onSelected = {
+                    paymentMethodCodeDraft = it.code
+                    if (it != PaymentMethodOption.Cash) {
+                        paymentCashTenderedDraft = ""
+                    }
+                },
                 modifier = Modifier.fillMaxWidth()
             )
+
+            if (paymentMethodDraft == PaymentMethodOption.Cash) {
+                OutlinedTextField(
+                    value = paymentCashTenderedDraft,
+                    onValueChange = { paymentCashTenderedDraft = it },
+                    label = { Text("Cash Received") },
+                    modifier = Modifier.fillMaxWidth().testTag("sales.form.cashTendered")
+                )
+                if (splitChangeDue != null) {
+                    MetricCard(
+                        "Split Change Due",
+                        "NGN ${"%.2f".format(splitChangeDue)}",
+                        Modifier.fillMaxWidth()
+                    )
+                }
+            }
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
@@ -536,7 +740,13 @@ fun SalesScreen() {
                                     color = MaterialTheme.colorScheme.onBackground
                                 )
                                 Text(
-                                    payment.paymentReference ?: "No reference",
+                                    buildString {
+                                        append(payment.paymentReference ?: "No reference")
+                                        if (payment.cashTendered != null) {
+                                            append(" • Cash received NGN ${"%.2f".format(payment.cashTendered)}")
+                                            append(" • Change NGN ${"%.2f".format((payment.cashTendered - payment.amount).coerceAtLeast(0.0))}")
+                                        }
+                                    },
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     style = MaterialTheme.typography.bodySmall
                                 )
@@ -591,7 +801,8 @@ fun SalesScreen() {
                                     NewSalePaymentInput(
                                         amount = it.amount,
                                         paymentMethodCode = it.paymentMethodCode,
-                                        paymentReference = it.paymentReference
+                                        paymentReference = it.paymentReference,
+                                        cashTendered = it.cashTendered
                                     )
                                 },
                                 customerName = customerName.ifBlank { null },
@@ -599,7 +810,9 @@ fun SalesScreen() {
                                 isCredit = outstandingAmount > 0.0,
                                 dueDateUtcIso = dueDateUtc.ifBlank { null }?.let { "${it}T00:00:00Z" },
                                 vatEnabled = vatEnabled,
-                                vatRate = vatRate
+                                vatRate = vatRate,
+                                shopName = shopSummary?.name ?: "Shopkeeper",
+                                cashierName = cashierName
                             )
 
                             val result = gateway.recordSale(input)
@@ -614,6 +827,7 @@ fun SalesScreen() {
                                     selectedItemQuantity = "1"
                                     paymentAmountDraft = ""
                                     paymentRefDraft = ""
+                                    paymentCashTenderedDraft = ""
                                     customerName = ""
                                     customerPhone = ""
                                     dueDateUtc = ""
@@ -687,7 +901,8 @@ private data class UiSaleLine(
 private data class UiSalePayment(
     val amount: Double,
     val paymentMethodCode: Int,
-    val paymentReference: String?
+    val paymentReference: String?,
+    val cashTendered: Double?
 )
 
 private val UiSaleLinesSaver = listSaver<List<UiSaleLine>, String>(
@@ -724,20 +939,22 @@ private val UiSalePaymentsSaver = listSaver<List<UiSalePayment>, String>(
             listOf(
                 payment.amount.toString(),
                 payment.paymentMethodCode.toString(),
-                Uri.encode(payment.paymentReference.orEmpty())
+                Uri.encode(payment.paymentReference.orEmpty()),
+                payment.cashTendered?.toString().orEmpty()
             ).joinToString("::")
         }
     },
     restore = { encoded ->
         encoded.mapNotNull { raw ->
             val parts = raw.split("::")
-            if (parts.size != 3) {
+            if (parts.size != 4) {
                 null
             } else {
                 UiSalePayment(
                     amount = parts[0].toDoubleOrNull() ?: 0.0,
                     paymentMethodCode = parts[1].toIntOrNull() ?: PaymentMethodOption.Cash.code,
-                    paymentReference = Uri.decode(parts[2]).ifBlank { null }
+                    paymentReference = Uri.decode(parts[2]).ifBlank { null },
+                    cashTendered = parts[3].ifBlank { null }?.toDoubleOrNull()
                 )
             }
         }

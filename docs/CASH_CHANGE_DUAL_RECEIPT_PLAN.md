@@ -197,7 +197,39 @@ Mobile generates two PDFs from receipt data
 
 ---
 
-## 6. Key Decisions & Notes
+## 6. Open Questions & Answers
+
+**Q: Should customer receipts be available immediately for unsynced sales, or only once the server accepts the sale?**
+
+Immediately. The architecture is offline-first — the app records the sale locally before sync and the customer is standing at the counter. Blocking receipt generation on server confirmation would be bad UX and operationally risky (network failure = no receipt). The customer receipt is generated from local data the moment the sale is saved. The sale number shown will be the temporary `LOCAL-{timestamp}` value until sync completes, at which point the receipt can silently regenerate with the server-assigned `SL-YYYYMMDD-XXXX` number. The PDF filename uses the final sale number once available.
+
+---
+
+**Q: Is `ChangeGiven` an auditable stored fact, or just a computed presentation field?**
+
+Computed only — do not store it. `ChangeGiven = CashTendered - Amount` and `CashTendered` is the only fact that needs persisting. Storing the derived value introduces a redundant column that can drift out of sync and adds noise to migrations with no benefit. The backend computes and returns `changeGiven` in receipt responses but never writes it to the database. Remove `ChangeGiven` from the entity change in §1a; keep only `CashTendered`.
+
+---
+
+**Q: Can a sale contain multiple cash splits, and if so, should receipts show per-payment change or only aggregate cash/change?**
+
+Multiple cash splits are structurally possible but physically uncommon (two separate cash handovers in one transaction). Receipts show **aggregate** cash and change: sum all cash payment amounts and all cash tendered values, present a single "Total Cash / Change Due" line at the receipt footer. Per-split change display would be confusing and does not reflect how real-world change is given. Validation rule: if a sale has multiple cash splits, the `cashTendered` on each must individually be ≥ its split `amount` — change is not pooled across splits at input time, only at display time.
+
+---
+
+**Q: Should owner receipt generation be available offline if it includes sensitive server-derived fields like creator name normalization or canonical margins?**
+
+Yes, fully offline. Every field the owner receipt needs is available locally:
+
+- **Cost prices** — already stored as `CostPriceSnapshot` on each `SaleLine` at the time of sale
+- **Margins** — purely computed from local cost and price snapshots
+- **Creator name** — the logged-in member's name is held in `AuthSessionManager` on both platforms
+
+No server round-trip is required. The `GET /receipt/owner` endpoint serves cross-device scenarios (viewing an owner receipt for a sale recorded on a different device/session), not the primary post-sale flow. Owner receipt generation after a sale on the current device is always local.
+
+---
+
+## 7. Key Decisions & Notes
 
 - **No new dependencies required.** Android uses existing `PdfDocument` API; iOS uses its existing PDF generation path.
 - **Cost price data is already stored.** `CostPriceSnapshot` is already captured on `SaleLine` at sale time — the owner receipt simply exposes it in a new view shape.

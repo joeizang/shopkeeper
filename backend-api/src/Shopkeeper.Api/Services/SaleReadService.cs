@@ -9,6 +9,48 @@ namespace Shopkeeper.Api.Services;
 public sealed class SaleReadService(ShopkeeperDbContext db, ApiCacheService cache)
 {
     private static readonly TimeSpan DetailTtl = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan ListTtl = TimeSpan.FromSeconds(15);
+
+
+    public Task<CachedApiResult<List<SaleDetailResponse>>> GetRecentSalesAsync(Guid tenantId, int limit, CancellationToken ct)
+    {
+        var safeLimit = Math.Clamp(limit, 1, 50);
+        return cache.GetOrSetAsync(
+            $"tenant:{tenantId}:sales:recent:{safeLimit}",
+            ListTtl,
+            [ApiCacheTags.Sales(tenantId)],
+            async token =>
+            {
+                var sales = await db.Sales
+                    .AsNoTracking()
+                    .Where(x => x.TenantId == tenantId)
+                    .Include(x => x.Lines)
+                    .Include(x => x.Payments)
+                    .OrderByDescending(x => x.UpdatedAtUtc)
+                    .Take(safeLimit)
+                    .ToListAsync(token);
+
+                return sales.Select(sale => new SaleDetailResponse(
+                    sale.Id,
+                    sale.SaleNumber,
+                    sale.CustomerName,
+                    sale.CustomerPhone,
+                    sale.Subtotal,
+                    sale.VatAmount,
+                    sale.DiscountAmount,
+                    sale.TotalAmount,
+                    sale.OutstandingAmount,
+                    sale.Status.ToString(),
+                    sale.IsCredit,
+                    sale.DueDateUtc,
+                    sale.IsVoided,
+                    sale.UpdatedAtUtc,
+                    sale.Lines.Select(x => new SaleLineView(x.Id, x.InventoryItemId, x.ProductNameSnapshot, x.Quantity, x.UnitPrice, x.LineTotal)).ToList(),
+                    sale.Payments.Select(x => new SalePaymentView(x.Id, x.Method.ToString(), x.Amount, x.Reference, x.CreatedAtUtc)).ToList()
+                )).ToList();
+            },
+            ct);
+    }
 
     public Task<CachedApiResult<SaleDetailResponse?>> GetSaleAsync(Guid tenantId, Guid saleId, CancellationToken ct)
     {

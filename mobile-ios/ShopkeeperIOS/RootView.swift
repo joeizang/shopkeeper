@@ -103,21 +103,23 @@ private struct UITestTabSwitcher: View {
     @Binding var selectedTab: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        // Test-only tab buttons for UI automation.
+        // Styled to blend with the background so they don't interfere
+        // visually, but XCTest can discover and tap them via
+        // accessibility identifiers.
+        VStack(alignment: .leading, spacing: 1) {
             ForEach(items) { item in
-                Button(item.title) {
+                Button {
                     selectedTab = item.id
+                } label: {
+                    Text(item.title)
+                        .font(.system(size: 1))
+                        .foregroundStyle(.clear)
+                        .frame(width: 44, height: 10)
                 }
-                .font(.caption2)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Color.skSurfaceVariant.opacity(0.92))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
                 .accessibilityIdentifier("ui.nav.\(item.id)")
             }
         }
-        .padding(.top, 8)
-        .padding(.leading, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }

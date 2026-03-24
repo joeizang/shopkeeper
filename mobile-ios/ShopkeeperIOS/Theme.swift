@@ -97,6 +97,7 @@ struct AccentCard<Content: View>: View {
 
     var body: some View {
         content
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(SKSpacing.lg)
             .background(
                 RoundedRectangle(cornerRadius: SKShape.large)

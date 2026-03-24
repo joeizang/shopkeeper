@@ -3,8 +3,10 @@ package com.shopkeeper.mobile.core.data
 import android.content.Context
 import android.provider.Settings
 import com.shopkeeper.mobile.auth.AuthSessionManager
+import com.shopkeeper.mobile.ui.components.PaymentMethodOption
 import com.shopkeeper.mobile.core.data.local.InventoryItemEntity
 import com.shopkeeper.mobile.core.data.local.PendingItemPhotoEntity
+import com.shopkeeper.mobile.core.data.local.ReceiptFileEntity
 import com.shopkeeper.mobile.core.data.local.SaleEntity
 import com.shopkeeper.mobile.core.data.local.ShopkeeperDatabase
 import com.shopkeeper.mobile.core.data.local.SyncConflictEntity
@@ -14,7 +16,11 @@ import com.shopkeeper.mobile.core.data.remote.AccountProfileResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreditorsReportResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreateInventoryItemRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleRequest
+import com.shopkeeper.mobile.core.data.remote.AddSalePaymentRequest
 import com.shopkeeper.mobile.core.data.remote.CreateSaleResponse
+import com.shopkeeper.mobile.core.data.remote.OwnerReceiptViewDto
+import com.shopkeeper.mobile.core.data.remote.ReceiptViewDto
+import com.shopkeeper.mobile.core.data.remote.SaleDetailResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentRequest
 import com.shopkeeper.mobile.core.data.remote.CreditDetailResponseDto
 import com.shopkeeper.mobile.core.data.remote.CreditRepaymentViewDto
@@ -50,6 +56,13 @@ import com.shopkeeper.mobile.core.data.remote.UpdateExpenseRequestDto
 import com.shopkeeper.mobile.core.data.remote.UpdateStaffMembershipRequestDto
 import com.shopkeeper.mobile.core.data.remote.UpdateShopVatSettingsRequestDto
 import com.squareup.moshi.Moshi
+import com.shopkeeper.mobile.receipts.ReceiptGenerationStatus
+import com.shopkeeper.mobile.receipts.ReceiptKinds
+import com.shopkeeper.mobile.receipts.ReceiptLinePayload
+import com.shopkeeper.mobile.receipts.ReceiptPaymentPayload
+import com.shopkeeper.mobile.receipts.ReceiptPdfGenerator
+import com.shopkeeper.mobile.receipts.ReceiptSourcePayload
+import com.shopkeeper.mobile.receipts.ReceiptVersions
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -85,6 +98,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     private val inventoryResponseAdapter = moshi.adapter(InventoryItemResponse::class.java)
     private val saleCreateAdapter = moshi.adapter(CreateSaleRequest::class.java)
     private val saleSyncPayloadAdapter = moshi.adapter(SaleSyncPayload::class.java)
+    private val receiptSourceAdapter = moshi.adapter(ReceiptSourcePayload::class.java)
     private val repaymentAdapter = moshi.adapter(CreditRepaymentEnvelope::class.java)
     private val syncPrefs = createStartupSafePreferences(appContext, "shopkeeper_sync_meta")
 
@@ -111,7 +125,6 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
     suspend fun getTodayCompletedSales(): List<SaleEntity> = withContext(Dispatchers.IO) {
         val today = LocalDate.now()
         db.salesDao().getAll()
-            .filter { it.status == "COMPLETED" }
             .filter { parseIsoDate(it.updatedAtUtcIso) == today }
             .sortedByDescending { it.updatedAtUtcIso }
     }
@@ -253,7 +266,9 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
 
     suspend fun getAccountProfile(): Result<AccountProfile> = withContext(Dispatchers.IO) {
         try {
-            Result.success(withAuthRetry { api.getAccountMe().toModel() })
+            val profile = withAuthRetry { api.getAccountMe().toModel() }
+            sessionManager.saveDisplayName(profile.fullName)
+            Result.success(profile)
         } catch (ex: Exception) {
             Result.failure(ex)
         }
@@ -268,7 +283,9 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 preferredLanguage = input.preferredLanguage,
                 timezone = input.timezone
             )
-            Result.success(withAuthRetry { api.updateAccountMe(payload).toModel() })
+            val profile = withAuthRetry { api.updateAccountMe(payload).toModel() }
+            sessionManager.saveDisplayName(profile.fullName)
+            Result.success(profile)
         } catch (ex: Exception) {
             Result.failure(ex)
         }
@@ -736,6 +753,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         try {
             val now = Instant.now().toString()
             val localSaleId = UUID.randomUUID().toString()
+            val provisionalSaleNumber = "LOCAL-${System.currentTimeMillis()}"
             val saleLines = input.lines
                 .filter { it.quantity > 0 && it.unitPrice >= 0.0 }
                 .map {
@@ -773,7 +791,8 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                         SalePaymentRequest(
                             method = it.paymentMethodCode,
                             amount = it.amount,
-                            reference = it.paymentReference
+                            reference = it.paymentReference,
+                            cashTendered = it.cashTendered
                         )
                     }
                     .ifEmpty { null }
@@ -782,7 +801,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             db.salesDao().upsert(
                 SaleEntity(
                     id = localSaleId,
-                    saleNumber = "LOCAL-${System.currentTimeMillis()}",
+                    saleNumber = provisionalSaleNumber,
                     customerName = input.customerName,
                     customerPhone = input.customerPhone,
                     lineItemsSummary = lineSummary,
@@ -798,6 +817,44 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 )
             )
 
+            val inventoryById = input.lines.associate { line ->
+                line.inventoryItemId to db.inventoryDao().getById(line.inventoryItemId)
+            }
+            val receiptSource = ReceiptSourcePayload(
+                localSaleId = localSaleId,
+                saleId = null,
+                saleNumber = provisionalSaleNumber,
+                shopName = input.shopName,
+                customerName = input.customerName,
+                cashierName = input.cashierName,
+                createdAtUtcIso = now,
+                subtotal = subtotal,
+                vatAmount = vatAmount,
+                discountAmount = input.discountAmount,
+                totalAmount = total,
+                paidAmount = paidAmount,
+                outstandingAmount = outstanding,
+                lines = input.lines.map { line ->
+                    val item = inventoryById[line.inventoryItemId]
+                    ReceiptLinePayload(
+                        productName = line.productName,
+                        quantity = line.quantity,
+                        unitPrice = line.unitPrice,
+                        lineTotal = line.quantity * line.unitPrice,
+                        costPrice = item?.costPrice ?: 0.0
+                    )
+                },
+                payments = input.payments.map {
+                    ReceiptPaymentPayload(
+                        methodCode = it.paymentMethodCode,
+                        amount = it.amount,
+                        reference = it.paymentReference,
+                        cashTendered = it.cashTendered
+                    )
+                }
+            )
+            persistReceiptArtifacts(receiptSource, ReceiptVersions.Local)
+
             db.syncDao().enqueue(
                 SyncQueueEntity(
                     entityName = QueueEntity.SaleCreate,
@@ -810,16 +867,79 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             )
 
             val syncSummary = runSyncOnce()
-            val latestSale = db.salesDao().getAll().firstOrNull()
-            Result.success(
-                RecordedSale(
-                    id = latestSale?.id ?: localSaleId,
-                    saleNumber = latestSale?.saleNumber ?: "LOCAL-PENDING",
-                    totalAmount = latestSale?.totalAmount ?: request.lines.sumOf { it.unitPrice * it.quantity },
-                    outstandingAmount = latestSale?.outstandingAmount ?: 0.0,
-                    synced = syncSummary.accepted > 0 && syncSummary.transientFailures == 0
+            val receipts = db.receiptDao().getByLocalSale(localSaleId)
+            Result.success(buildRecordedSaleFromReceipts(localSaleId, receipts, receiptSource))
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun addSalePayment(
+        saleId: String,
+        amount: Double,
+        paymentMethodCode: Int,
+        paymentReference: String?,
+        cashTendered: Double?
+    ): Result<RecordedSale> = withContext(Dispatchers.IO) {
+        try {
+            require(amount > 0.0) { "Payment amount must be greater than zero." }
+            if (paymentMethodCode == PaymentMethodOption.Cash.code) {
+                require(cashTendered != null && cashTendered >= amount) { "Cash received must be at least the payment amount." }
+            }
+
+            withAuthRetry {
+                api.addSalePayment(
+                    saleId,
+                    AddSalePaymentRequest(
+                        method = paymentMethodCode,
+                        amount = amount,
+                        reference = paymentReference,
+                        cashTendered = cashTendered,
+                        note = null
+                    )
                 )
+            }
+
+            val detail = withAuthRetry { api.getSale(saleId) }
+            db.salesDao().upsert(detail.toEntity())
+
+            val existingReceipt = db.receiptDao().getByServerSaleId(saleId)
+            val existingSource = existingReceipt?.sourceJson?.let(receiptSourceAdapter::fromJson)
+            val localSaleId = existingReceipt?.localSaleId ?: saleId
+            val customerReceipt = withAuthRetry { api.getSaleReceipt(saleId) }
+            val ownerReceipt = if (sessionCapabilities().canViewReports) {
+                runCatching { withAuthRetry { api.getSaleOwnerReceipt(saleId) } }.getOrNull()
+            } else {
+                null
+            }
+            val canonicalSource = customerReceipt.toReceiptSource(
+                localSaleId = localSaleId,
+                cashierName = ownerReceipt?.createdByName ?: existingSource?.cashierName ?: "Shop Staff",
+                ownerReceipt = ownerReceipt
             )
+            persistReceiptArtifacts(canonicalSource, ReceiptVersions.Canonical)
+            val receipts = db.receiptDao().getByLocalSale(localSaleId)
+            Result.success(buildRecordedSaleFromReceipts(localSaleId, receipts, canonicalSource))
+        } catch (ex: Exception) {
+            Result.failure(ex)
+        }
+    }
+
+    suspend fun retryReceiptGeneration(localSaleId: String): Result<RecordedSale> = withContext(Dispatchers.IO) {
+        try {
+            val receipts = db.receiptDao().getByLocalSale(localSaleId)
+            require(receipts.isNotEmpty()) { "No receipt metadata found for this sale." }
+
+            val latest = receipts
+                .sortedWith(compareByDescending<ReceiptFileEntity> { it.version == ReceiptVersions.Canonical }
+                    .thenByDescending { it.updatedAtUtcIso })
+                .first()
+            val source = receiptSourceAdapter.fromJson(latest.sourceJson)
+                ?: error("Receipt source metadata is invalid.")
+
+            persistReceiptArtifacts(source, latest.version)
+            val refreshed = db.receiptDao().getByLocalSale(localSaleId)
+            Result.success(buildRecordedSaleFromReceipts(localSaleId, refreshed, source))
         } catch (ex: Exception) {
             Result.failure(ex)
         }
@@ -1035,6 +1155,7 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             ?: error("Invalid sale payload")
 
         val response = withAuthRetry { api.createSale(payload) }
+        regenerateCanonicalReceiptArtifacts(change.entityId, response.id, response.saleNumber)
 
         db.salesDao().deleteById(change.entityId)
         db.salesDao().upsert(response.toEntity(payload))
@@ -1204,6 +1325,117 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
         }.getOrNull()
     }
 
+
+    private suspend fun persistReceiptArtifacts(source: ReceiptSourcePayload, version: String) {
+        val generator = ReceiptPdfGenerator(appContext)
+        persistSingleReceiptArtifact(source, version, ReceiptKinds.Customer) {
+            generator.generateCustomerReceipt(source, version)
+        }
+        persistSingleReceiptArtifact(source, version, ReceiptKinds.Owner) {
+            generator.generateOwnerReceipt(source, version)
+        }
+    }
+
+    private suspend fun persistSingleReceiptArtifact(
+        source: ReceiptSourcePayload,
+        version: String,
+        receiptKind: String,
+        generate: () -> File
+    ) {
+        val now = Instant.now().toString()
+        val sourceJson = receiptSourceAdapter.toJson(source)
+        val fileResult = runCatching(generate)
+        val entity = ReceiptFileEntity(
+            key = receiptKey(source.localSaleId, receiptKind),
+            localSaleId = source.localSaleId,
+            serverSaleId = source.saleId,
+            receiptKind = receiptKind,
+            version = version,
+            saleNumber = source.saleNumber,
+            filePath = fileResult.getOrNull()?.absolutePath.orEmpty(),
+            sourceJson = sourceJson,
+            status = if (fileResult.isSuccess) ReceiptGenerationStatus.Ready else ReceiptGenerationStatus.Failed,
+            generatedAtUtcIso = now,
+            updatedAtUtcIso = now
+        )
+        db.receiptDao().upsert(entity)
+    }
+
+    private suspend fun regenerateCanonicalReceiptArtifacts(localSaleId: String, serverSaleId: String, canonicalSaleNumber: String) {
+        val receipts = db.receiptDao().getByLocalSale(localSaleId)
+        if (receipts.isEmpty()) {
+            return
+        }
+
+        val baseSource = receiptSourceAdapter.fromJson(receipts.first().sourceJson) ?: return
+        val canonicalSource = baseSource.copy(saleId = serverSaleId, saleNumber = canonicalSaleNumber)
+        persistReceiptArtifacts(canonicalSource, ReceiptVersions.Canonical)
+    }
+
+    private suspend fun buildRecordedSaleFromReceipts(
+        localSaleId: String,
+        receipts: List<ReceiptFileEntity>,
+        fallbackSource: ReceiptSourcePayload
+    ): RecordedSale {
+        val customerReceipt = receipts.firstOrNull { it.receiptKind == ReceiptKinds.Customer }
+        val ownerReceipt = receipts.firstOrNull { it.receiptKind == ReceiptKinds.Owner }
+        val effectiveId = customerReceipt?.serverSaleId ?: fallbackSource.saleId ?: localSaleId
+        val effectiveSaleNumber = customerReceipt?.saleNumber ?: fallbackSource.saleNumber
+        return RecordedSale(
+            id = effectiveId,
+            localSaleId = localSaleId,
+            saleNumber = effectiveSaleNumber,
+            totalAmount = fallbackSource.totalAmount,
+            outstandingAmount = fallbackSource.outstandingAmount,
+            synced = receipts.any { !it.serverSaleId.isNullOrBlank() },
+            customerReceiptPath = customerReceipt?.filePath,
+            ownerReceiptPath = ownerReceipt?.filePath,
+            receiptGenerationFailed = receipts.any { it.status == ReceiptGenerationStatus.Failed }
+        )
+    }
+
+    private fun ReceiptViewDto.toReceiptSource(
+        localSaleId: String,
+        cashierName: String,
+        ownerReceipt: OwnerReceiptViewDto?
+    ): ReceiptSourcePayload {
+        val ownerLines = ownerReceipt?.lines.orEmpty()
+        return ReceiptSourcePayload(
+            localSaleId = localSaleId,
+            saleId = saleId,
+            saleNumber = saleNumber,
+            shopName = shopName,
+            customerName = customerName,
+            cashierName = cashierName,
+            createdAtUtcIso = createdAtUtc,
+            subtotal = subtotal,
+            vatAmount = vatAmount,
+            discountAmount = discountAmount,
+            totalAmount = totalAmount,
+            paidAmount = paidAmount,
+            outstandingAmount = outstandingAmount,
+            lines = lines.mapIndexed { index, line ->
+                ReceiptLinePayload(
+                    productName = line.productName,
+                    quantity = line.quantity,
+                    unitPrice = line.unitPrice,
+                    lineTotal = line.lineTotal,
+                    costPrice = ownerLines.getOrNull(index)?.costPrice ?: 0.0
+                )
+            },
+            payments = payments.map {
+                ReceiptPaymentPayload(
+                    methodCode = it.method,
+                    amount = it.amount,
+                    reference = it.reference,
+                    cashTendered = it.cashTendered
+                )
+            }
+        )
+    }
+
+    private fun receiptKey(localSaleId: String, receiptKind: String): String = "$localSaleId:$receiptKind"
+
     private suspend fun <T> withAuthRetry(block: suspend () -> T): T {
         ensureAuthenticated(forceRefresh = false)
         try {
@@ -1270,6 +1502,25 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
             itemType = itemTypeCode,
             conditionGrade = conditionGradeCode,
             conditionNotes = conditionNotes
+        )
+    }
+
+    private fun SaleDetailResponseDto.toEntity(): SaleEntity {
+        return SaleEntity(
+            id = id,
+            saleNumber = saleNumber,
+            customerName = customerName,
+            customerPhone = customerPhone,
+            lineItemsSummary = lines.joinToString(", ") { "${it.productNameSnapshot} x${it.quantity}" },
+            subtotal = subtotal,
+            vatAmount = vatAmount,
+            discountAmount = discountAmount,
+            totalAmount = totalAmount,
+            outstandingAmount = outstandingAmount,
+            status = normalizeSaleStatus(status),
+            isCredit = isCredit,
+            dueDateUtcIso = dueDateUtc,
+            updatedAtUtcIso = updatedAtUtc
         )
     }
 
@@ -1521,6 +1772,10 @@ class ShopkeeperDataGateway private constructor(private val appContext: Context)
                 instance ?: ShopkeeperDataGateway(context.applicationContext).also { instance = it }
             }
         }
+
+        fun clearInstance() {
+            synchronized(this) { instance = null }
+        }
     }
 }
 
@@ -1620,7 +1875,9 @@ data class NewSaleInput(
     val isCredit: Boolean,
     val dueDateUtcIso: String?,
     val vatEnabled: Boolean,
-    val vatRate: Double
+    val vatRate: Double,
+    val shopName: String,
+    val cashierName: String
 )
 
 data class NewSaleLineInput(
@@ -1633,7 +1890,8 @@ data class NewSaleLineInput(
 data class NewSalePaymentInput(
     val amount: Double,
     val paymentMethodCode: Int,
-    val paymentReference: String?
+    val paymentReference: String?,
+    val cashTendered: Double?
 )
 
 data class CreditRepaymentInput(
@@ -1646,10 +1904,14 @@ data class CreditRepaymentInput(
 
 data class RecordedSale(
     val id: String,
+    val localSaleId: String,
     val saleNumber: String,
     val totalAmount: Double,
     val outstandingAmount: Double,
-    val synced: Boolean
+    val synced: Boolean,
+    val customerReceiptPath: String?,
+    val ownerReceiptPath: String?,
+    val receiptGenerationFailed: Boolean
 )
 
 data class CreditSaleOption(

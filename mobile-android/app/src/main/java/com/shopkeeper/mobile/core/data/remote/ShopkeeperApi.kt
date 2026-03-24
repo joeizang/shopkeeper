@@ -82,6 +82,21 @@ interface ShopkeeperApi {
     @POST("api/v1/sales")
     suspend fun createSale(@Body body: CreateSaleRequest): CreateSaleResponse
 
+    @GET("api/v1/sales/{id}")
+    suspend fun getSale(@Path("id") saleId: String): SaleDetailResponseDto
+
+    @POST("api/v1/sales/{id}/payments")
+    suspend fun addSalePayment(
+        @Path("id") saleId: String,
+        @Body body: AddSalePaymentRequest
+    ): Map<String, Any>
+
+    @GET("api/v1/sales/{id}/receipt")
+    suspend fun getSaleReceipt(@Path("id") saleId: String): ReceiptViewDto
+
+    @GET("api/v1/sales/{id}/receipt/owner")
+    suspend fun getSaleOwnerReceipt(@Path("id") saleId: String): OwnerReceiptViewDto
+
     @POST("api/v1/credits/{saleId}/repayments")
     suspend fun addCreditRepayment(
         @Path("saleId") saleId: String,

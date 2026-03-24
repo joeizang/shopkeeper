@@ -16,6 +16,8 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.shopkeeper.mobile.MainActivity
+import com.shopkeeper.mobile.core.data.ShopkeeperDataGateway
+import com.shopkeeper.mobile.core.data.local.ShopkeeperDatabase
 import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
 import org.junit.After
 import org.junit.Before
@@ -136,6 +138,8 @@ abstract class BaseE2ETest {
             context.createDeviceProtectedStorageContext()
                 .deleteSharedPreferences("shopkeeper_sync_meta")
         }
+        ShopkeeperDataGateway.clearInstance()
+        ShopkeeperDatabase.closeAndClear()
         context.deleteDatabase("shopkeeper-mobile.db")
     }
 }

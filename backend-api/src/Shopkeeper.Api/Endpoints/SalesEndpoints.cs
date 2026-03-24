@@ -19,11 +19,14 @@ public static class SalesEndpoints
             .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.SalesAccess });
 
         group.MapPost("/", CreateSale);
+        group.MapGet("/", ListSales);
         group.MapGet("/{id:guid}", GetSale);
         group.MapPost("/{id:guid}/payments", AddPayment);
         group.MapPost("/{id:guid}/void", VoidSale)
             .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.OwnerOrManager });
         group.MapGet("/{id:guid}/receipt", GetReceipt);
+        group.MapGet("/{id:guid}/receipt/owner", GetOwnerReceipt)
+            .RequireAuthorization(new AuthorizeAttribute { Policy = AuthPolicyNames.OwnerOrManager });
 
         return app;
     }
@@ -98,7 +101,7 @@ public static class SalesEndpoints
             var sale = new Sale
             {
                 TenantId = tenantId.Value,
-                SaleNumber = string.Empty, // set atomically inside the transaction below
+                SaleNumber = string.Empty,
                 CustomerName = request.CustomerName?.Trim(),
                 CustomerPhone = string.IsNullOrWhiteSpace(request.CustomerPhone) ? null : request.CustomerPhone.Trim(),
                 DiscountAmount = totals.DiscountAmount,
@@ -138,15 +141,14 @@ public static class SalesEndpoints
                         TenantId = tenantId.Value,
                         Method = payment.Method,
                         Amount = payment.Amount,
-                        Reference = payment.Reference
+                        Reference = payment.Reference?.Trim(),
+                        CashTendered = payment.CashTendered
                     });
                 }
             }
 
             await using var tx = await db.Database.BeginTransactionAsync(ct);
 
-            // Atomically upsert the per-tenant sale counter and retrieve the next sequence
-            // number. PostgreSQL's ON CONFLICT DO UPDATE is atomic — no race condition.
             var seqRows = await db.Database.SqlQuery<int>($"""
                 INSERT INTO "TenantSaleCounters" ("TenantId", "NextSaleNumber")
                 VALUES ({tenantId.Value}, 1)
@@ -206,6 +208,24 @@ public static class SalesEndpoints
         }
     }
 
+
+    private static async Task<IResult> ListSales(
+        [FromQuery] int? limit,
+        SaleReadService reads,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue)
+        {
+            return Results.Unauthorized();
+        }
+
+        var cached = await reads.GetRecentSalesAsync(tenantId.Value, limit ?? 20, ct);
+        return HttpCacheResults.OkOrNotModified(httpContext, cached);
+    }
+
     private static async Task<IResult> GetSale(
         Guid id,
         SaleReadService reads,
@@ -236,7 +256,7 @@ public static class SalesEndpoints
         HttpContext httpContext,
         CancellationToken ct)
     {
-        var validation = ValidatePaymentRequest(request.Method, request.Amount, request.Reference, "amount");
+        var validation = ValidatePaymentRequest(request.Method, request.Amount, request.Reference, request.CashTendered, "amount");
         if (validation.Count > 0)
         {
             return Results.ValidationProblem(validation);
@@ -282,7 +302,8 @@ public static class SalesEndpoints
                 SaleId = sale.Id,
                 Method = request.Method,
                 Amount = request.Amount,
-                Reference = request.Reference?.Trim()
+                Reference = request.Reference?.Trim(),
+                CashTendered = request.CashTendered
             };
 
             db.SalePayments.Add(payment);
@@ -315,7 +336,8 @@ public static class SalesEndpoints
                     payment.SaleId,
                     payment.Method,
                     payment.Amount,
-                    payment.Reference
+                    payment.Reference,
+                    payment.CashTendered
                 })
             });
             db.SyncChanges.Add(new SyncChange
@@ -445,23 +467,42 @@ public static class SalesEndpoints
         }
 
         var shop = await db.Shops.AsNoTracking().FirstAsync(x => x.Id == tenantId.Value, ct);
+        httpContext.Response.Headers.CacheControl = "private, no-cache";
+        return Results.Ok(BuildCustomerReceipt(sale, shop.Name));
+    }
 
-        var response = new ReceiptView(
-            sale.Id,
-            sale.SaleNumber,
-            sale.CreatedAtUtc,
-            shop.Name,
-            sale.CustomerName,
-            sale.Subtotal,
-            sale.VatAmount,
-            sale.DiscountAmount,
-            sale.TotalAmount,
-            sale.Payments.Sum(x => x.Amount),
-            sale.OutstandingAmount,
-            sale.Lines.Select(x => new ReceiptLineView(x.ProductNameSnapshot, x.Quantity, x.UnitPrice, x.LineTotal)).ToList(),
-            sale.Payments.Select(x => new SalePaymentRequest(x.Method, x.Amount, x.Reference)).ToList());
+    private static async Task<IResult> GetOwnerReceipt(
+        Guid id,
+        ShopkeeperDbContext db,
+        TenantContextAccessor tenant,
+        HttpContext httpContext,
+        CancellationToken ct)
+    {
+        var tenantId = tenant.GetTenantId(httpContext.User);
+        if (!tenantId.HasValue)
+        {
+            return Results.Unauthorized();
+        }
 
-        return Results.Ok(response);
+        var sale = await db.Sales
+            .AsNoTracking()
+            .Include(x => x.Lines)
+            .Include(x => x.Payments)
+            .FirstOrDefaultAsync(x => x.TenantId == tenantId.Value && x.Id == id, ct);
+        if (sale is null)
+        {
+            return Results.NotFound();
+        }
+
+        var shop = await db.Shops.AsNoTracking().FirstAsync(x => x.Id == tenantId.Value, ct);
+        var createdByName = await db.ShopMemberships
+            .AsNoTracking()
+            .Where(x => x.ShopId == tenantId.Value && x.Id == sale.CreatedByMembershipId)
+            .Select(x => x.UserAccount.FullName)
+            .FirstOrDefaultAsync(ct) ?? "Unknown Staff";
+
+        httpContext.Response.Headers.CacheControl = "private, no-store";
+        return Results.Ok(BuildOwnerReceipt(sale, shop.Name, createdByName));
     }
 
     private static Dictionary<string, string[]> ValidateCreateSale(CreateSaleRequest request)
@@ -493,9 +534,10 @@ public static class SalesEndpoints
 
         if (request.InitialPayments is not null)
         {
-            foreach (var payment in request.InitialPayments)
+            for (var i = 0; i < request.InitialPayments.Count; i++)
             {
-                foreach (var pair in ValidatePaymentRequest(payment.Method, payment.Amount, payment.Reference, "initialPayments"))
+                var payment = request.InitialPayments[i];
+                foreach (var pair in ValidatePaymentRequest(payment.Method, payment.Amount, payment.Reference, payment.CashTendered, $"initialPayments[{i}].amount"))
                 {
                     errors[pair.Key] = pair.Value;
                 }
@@ -505,7 +547,7 @@ public static class SalesEndpoints
         return errors;
     }
 
-    private static Dictionary<string, string[]> ValidatePaymentRequest(PaymentMethod method, decimal amount, string? reference, string fieldName)
+    private static Dictionary<string, string[]> ValidatePaymentRequest(PaymentMethod method, decimal amount, string? reference, decimal? cashTendered, string fieldName)
     {
         var errors = new Dictionary<string, string[]>();
         if (amount <= 0)
@@ -516,6 +558,18 @@ public static class SalesEndpoints
         if (method is PaymentMethod.BankTransfer or PaymentMethod.Pos && string.IsNullOrWhiteSpace(reference))
         {
             errors["reference"] = ["Reference is required for transfer and POS payments."];
+        }
+
+        if (method == PaymentMethod.Cash)
+        {
+            if (cashTendered.HasValue && cashTendered.Value < amount)
+            {
+                errors["cashTendered"] = ["Cash tendered must be at least the cash payment amount."];
+            }
+        }
+        else if (cashTendered.HasValue)
+        {
+            errors["cashTendered"] = ["Cash tendered can only be supplied for cash payments."];
         }
 
         return errors;
@@ -554,5 +608,98 @@ public static class SalesEndpoints
             sale.DueDateUtc,
             sale.UpdatedAtUtc
         };
+    }
+
+    private static ReceiptView BuildCustomerReceipt(Sale sale, string shopName)
+    {
+        var payments = BuildReceiptPayments(sale.Payments);
+        var cashSummary = BuildCashSummary(sale.Payments);
+
+        return new ReceiptView(
+            sale.Id,
+            sale.SaleNumber,
+            sale.CreatedAtUtc,
+            shopName,
+            sale.CustomerName,
+            sale.Subtotal,
+            sale.VatAmount,
+            sale.DiscountAmount,
+            sale.TotalAmount,
+            sale.Payments.Sum(x => x.Amount),
+            sale.OutstandingAmount,
+            cashSummary.TotalCashAmount,
+            cashSummary.TotalCashTendered,
+            cashSummary.ChangeDue,
+            sale.Lines.Select(x => new ReceiptLineView(x.ProductNameSnapshot, x.Quantity, x.UnitPrice, x.LineTotal)).ToList(),
+            payments);
+    }
+
+    private static OwnerReceiptView BuildOwnerReceipt(Sale sale, string shopName, string createdByName)
+    {
+        var payments = BuildReceiptPayments(sale.Payments);
+        var cashSummary = BuildCashSummary(sale.Payments);
+        var ownerLines = sale.Lines
+            .Select(x => new OwnerReceiptLineView(
+                x.ProductNameSnapshot,
+                x.Quantity,
+                x.UnitPrice,
+                x.CostPriceSnapshot,
+                x.LineTotal,
+                (x.UnitPrice - x.CostPriceSnapshot) * x.Quantity))
+            .ToList();
+        var totalCogs = ownerLines.Sum(x => x.CostPrice * x.Quantity);
+        var grossProfit = sale.TotalAmount - totalCogs;
+        var grossMarginPct = sale.TotalAmount <= 0 ? 0 : Math.Round((grossProfit / sale.TotalAmount) * 100m, 2);
+
+        return new OwnerReceiptView(
+            sale.Id,
+            sale.SaleNumber,
+            sale.CreatedAtUtc,
+            shopName,
+            sale.CustomerName,
+            createdByName,
+            sale.Subtotal,
+            sale.VatAmount,
+            sale.DiscountAmount,
+            sale.TotalAmount,
+            sale.Payments.Sum(x => x.Amount),
+            sale.OutstandingAmount,
+            cashSummary.TotalCashAmount,
+            cashSummary.TotalCashTendered,
+            cashSummary.ChangeDue,
+            totalCogs,
+            grossProfit,
+            grossMarginPct,
+            ownerLines,
+            payments);
+    }
+
+    private static List<ReceiptPaymentView> BuildReceiptPayments(IEnumerable<SalePayment> payments)
+    {
+        return payments.Select(x => new ReceiptPaymentView(
+            x.Method,
+            x.Amount,
+            x.Reference,
+            x.CashTendered,
+            x.CashTendered.HasValue ? x.CashTendered.Value - x.Amount : null)).ToList();
+    }
+
+    private static (decimal? TotalCashAmount, decimal? TotalCashTendered, decimal? ChangeDue) BuildCashSummary(IEnumerable<SalePayment> payments)
+    {
+        var cashPayments = payments.Where(x => x.Method == PaymentMethod.Cash).ToList();
+        if (cashPayments.Count == 0)
+        {
+            return (null, null, null);
+        }
+
+        var totalCashAmount = cashPayments.Sum(x => x.Amount);
+        var allHaveTendered = cashPayments.All(x => x.CashTendered.HasValue);
+        if (!allHaveTendered)
+        {
+            return (totalCashAmount, null, null);
+        }
+
+        var totalCashTendered = cashPayments.Sum(x => x.CashTendered ?? 0m);
+        return (totalCashAmount, totalCashTendered, totalCashTendered - totalCashAmount);
     }
 }

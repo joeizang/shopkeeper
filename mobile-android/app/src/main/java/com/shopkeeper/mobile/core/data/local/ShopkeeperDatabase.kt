@@ -9,16 +9,18 @@ import androidx.room.RoomDatabase
     entities = [
         InventoryItemEntity::class,
         SaleEntity::class,
+        ReceiptFileEntity::class,
         SyncQueueEntity::class,
         SyncConflictEntity::class,
         PendingItemPhotoEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class ShopkeeperDatabase : RoomDatabase() {
     abstract fun inventoryDao(): InventoryDao
     abstract fun salesDao(): SalesDao
+    abstract fun receiptDao(): ReceiptDao
     abstract fun syncDao(): SyncDao
     abstract fun pendingItemPhotoDao(): PendingItemPhotoDao
 
@@ -36,6 +38,13 @@ abstract class ShopkeeperDatabase : RoomDatabase() {
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
+            }
+        }
+
+        fun closeAndClear() {
+            synchronized(this) {
+                instance?.close()
+                instance = null
             }
         }
     }

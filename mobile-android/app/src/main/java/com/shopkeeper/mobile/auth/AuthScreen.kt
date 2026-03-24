@@ -25,6 +25,7 @@ import com.shopkeeper.mobile.ui.components.BrickButton
 import com.shopkeeper.mobile.ui.components.ScreenColumn
 import com.shopkeeper.mobile.ui.components.ScreenHeader
 import com.shopkeeper.mobile.ui.components.SectionTitle
+import com.shopkeeper.mobile.ui.components.SelectionPill
 import com.shopkeeper.mobile.ui.components.SoftButton
 import com.shopkeeper.mobile.ui.components.StatusBanner
 import com.shopkeeper.mobile.ui.test.ShopkeeperTestTags
@@ -60,13 +61,15 @@ fun AuthScreen(onAuthenticated: () -> Unit = {}) {
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            SoftButton(
+            SelectionPill(
                 text = "Sign In",
+                selected = mode == AuthMode.SignIn,
                 onClick = { mode = AuthMode.SignIn },
                 modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.AUTH_MODE_SIGN_IN)
             )
-            SoftButton(
+            SelectionPill(
                 text = "Create Shop",
+                selected = mode == AuthMode.RegisterOwner,
                 onClick = { mode = AuthMode.RegisterOwner },
                 modifier = Modifier.weight(1f).testTag(ShopkeeperTestTags.AUTH_MODE_REGISTER)
             )

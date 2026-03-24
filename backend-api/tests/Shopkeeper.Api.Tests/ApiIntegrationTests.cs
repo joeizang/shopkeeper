@@ -687,6 +687,170 @@ public sealed class ApiIntegrationTests
     }
 
     [Fact]
+    public async Task CustomerReceipt_ReturnsAggregateCashTenderedAndChange()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-cash-receipt@shopkeeper.local", "Cash Receipt Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "CASH-R-1001");
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Cash Buyer",
+            customerPhone = "08035555555",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 2150m, reference = (string?)null, cashTendered = 3000m }
+            }
+        });
+        saleResponse.EnsureSuccessStatusCode();
+        var sale = (await saleResponse.Content.ReadFromJsonAsync<CreateSaleEnvelope>())!;
+
+        var receiptResponse = await client.GetAsync($"/api/v1/sales/{sale.Id}/receipt");
+        receiptResponse.EnsureSuccessStatusCode();
+        var receipt = (await receiptResponse.Content.ReadFromJsonAsync<ReceiptEnvelope>())!;
+
+        Assert.Equal(2150m, receipt.TotalCashAmount);
+        Assert.Equal(3000m, receipt.TotalCashTendered);
+        Assert.Equal(850m, receipt.ChangeDue);
+        Assert.Single(receipt.Payments);
+        Assert.Equal(3000m, receipt.Payments[0].CashTendered);
+        Assert.Equal(850m, receipt.Payments[0].ChangeDue);
+    }
+
+    [Fact]
+    public async Task CreateSale_RejectsCashTenderedLowerThanCashAmount()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-bad-cash@shopkeeper.local", "Cash Validation Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "CASH-V-1001");
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Cash Buyer",
+            customerPhone = "08036666666",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 2150m, reference = (string?)null, cashTendered = 2000m }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, saleResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task CreateSale_RejectsCashTenderedForNonCashPayment()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-bad-noncash@shopkeeper.local", "NonCash Validation Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "NONCASH-V-1001");
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Transfer Buyer",
+            customerPhone = "08037777777",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 2, amount = 2150m, reference = "TRX-1001", cashTendered = 3000m }
+            }
+        });
+
+        Assert.Equal(HttpStatusCode.BadRequest, saleResponse.StatusCode);
+    }
+
+    [Fact]
+    public async Task OwnerReceipt_RestrictsSalesperson_AndAllowsOwnerAndManager()
+    {
+        await using var factory = new ShopkeeperApiFactory();
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var owner = await RegisterOwner(client, "owner-owner-receipt@shopkeeper.local", "Owner Receipt Shop");
+        SetBearer(client, owner.AccessToken);
+
+        var item = await CreateInventoryItem(client, "OWNER-R-1001");
+        var saleResponse = await client.PostAsJsonAsync("/api/v1/sales/", new
+        {
+            customerName = "Margin Buyer",
+            customerPhone = "08038888888",
+            discountAmount = 0m,
+            isCredit = false,
+            dueDateUtc = (DateTime?)null,
+            lines = new[]
+            {
+                new { inventoryItemId = item.Id, quantity = 1, unitPrice = 2000m }
+            },
+            initialPayments = new[]
+            {
+                new { method = 1, amount = 2150m, reference = (string?)null, cashTendered = 2500m }
+            }
+        });
+        saleResponse.EnsureSuccessStatusCode();
+        var sale = (await saleResponse.Content.ReadFromJsonAsync<CreateSaleEnvelope>())!;
+
+        var ownerReceiptResponse = await client.GetAsync($"/api/v1/sales/{sale.Id}/receipt/owner");
+        ownerReceiptResponse.EnsureSuccessStatusCode();
+        var ownerReceipt = (await ownerReceiptResponse.Content.ReadFromJsonAsync<OwnerReceiptEnvelope>())!;
+        Assert.Equal(1000m, ownerReceipt.TotalCogs);
+        Assert.Equal(1150m, ownerReceipt.GrossProfit);
+        Assert.Equal("Test Owner", ownerReceipt.CreatedByName);
+        Assert.Single(ownerReceipt.Lines);
+        Assert.Equal(1000m, ownerReceipt.Lines[0].CostPrice);
+        Assert.Equal(1000m, ownerReceipt.Lines[0].LineProfit);
+
+        var manager = await InviteStaffAndLogin(client, owner.ShopId, "manager-owner-receipt@shopkeeper.local", "ShopManager", "Manager User");
+        SetBearer(client, manager.AccessToken);
+        var managerReceiptResponse = await client.GetAsync($"/api/v1/sales/{sale.Id}/receipt/owner");
+        managerReceiptResponse.EnsureSuccessStatusCode();
+
+        SetBearer(client, owner.AccessToken);
+        var salesperson = await InviteStaffAndLogin(client, owner.ShopId, "sales-owner-receipt@shopkeeper.local", "Salesperson", "Sales User");
+        SetBearer(client, salesperson.AccessToken);
+        var salesReceiptResponse = await client.GetAsync($"/api/v1/sales/{sale.Id}/receipt/owner");
+        Assert.Equal(HttpStatusCode.Forbidden, salesReceiptResponse.StatusCode);
+    }
+
+    [Fact]
     public async Task AddPayment_RejectsOverpayment()
     {
         await using var factory = new ShopkeeperApiFactory();
@@ -994,6 +1158,45 @@ public sealed class ApiIntegrationTests
     private sealed record ShopEnvelope(Guid Id, string Name, string Code, bool VatEnabled, decimal VatRate, decimal DefaultDiscountPercent, string Role, string RowVersionBase64);
     private sealed record CreateSaleEnvelope(Guid Id, string SaleNumber, decimal TotalAmount, decimal OutstandingAmount);
     private sealed record SalePaymentEnvelope(Guid Id, decimal Amount, string Method, string? Reference);
+    private sealed record ReceiptPaymentEnvelope(int Method, decimal Amount, string? Reference, decimal? CashTendered, decimal? ChangeDue);
+    private sealed record ReceiptEnvelope(
+        Guid SaleId,
+        string SaleNumber,
+        DateTime CreatedAtUtc,
+        string ShopName,
+        string? CustomerName,
+        decimal Subtotal,
+        decimal VatAmount,
+        decimal DiscountAmount,
+        decimal TotalAmount,
+        decimal PaidAmount,
+        decimal OutstandingAmount,
+        decimal? TotalCashAmount,
+        decimal? TotalCashTendered,
+        decimal? ChangeDue,
+        List<ReceiptPaymentEnvelope> Payments);
+    private sealed record OwnerReceiptLineEnvelope(string ProductName, int Quantity, decimal UnitPrice, decimal CostPrice, decimal LineTotal, decimal LineProfit);
+    private sealed record OwnerReceiptEnvelope(
+        Guid SaleId,
+        string SaleNumber,
+        DateTime CreatedAtUtc,
+        string ShopName,
+        string? CustomerName,
+        string CreatedByName,
+        decimal Subtotal,
+        decimal VatAmount,
+        decimal DiscountAmount,
+        decimal TotalAmount,
+        decimal PaidAmount,
+        decimal OutstandingAmount,
+        decimal? TotalCashAmount,
+        decimal? TotalCashTendered,
+        decimal? ChangeDue,
+        decimal TotalCogs,
+        decimal GrossProfit,
+        decimal GrossMarginPct,
+        List<OwnerReceiptLineEnvelope> Lines,
+        List<ReceiptPaymentEnvelope> Payments);
     private sealed record SaleDetailsEnvelope(
         Guid Id,
         decimal Subtotal,

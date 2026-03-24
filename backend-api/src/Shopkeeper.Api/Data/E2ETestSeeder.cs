@@ -18,13 +18,22 @@ public sealed record E2ESeedResult(
 
 public sealed class E2ETestSeeder(ShopkeeperDbContext db, UserManager<UserAccount> userManager)
 {
+    private static readonly SemaphoreSlim ResetLock = new(1, 1);
     private const string DefaultPassword = "Shopkeeper123!";
 
     public async Task<E2ESeedResult> ResetAndSeedAsync(CancellationToken ct = default)
     {
-        await db.Database.EnsureDeletedAsync(ct);
-        await db.Database.MigrateAsync(ct);
-        return await SeedAsync(ct);
+        await ResetLock.WaitAsync(ct);
+        try
+        {
+            await db.Database.EnsureDeletedAsync(ct);
+            await db.Database.EnsureCreatedAsync(ct);
+            return await SeedAsync(ct);
+        }
+        finally
+        {
+            ResetLock.Release();
+        }
     }
 
     public async Task<E2ESeedResult> SeedAsync(CancellationToken ct = default)

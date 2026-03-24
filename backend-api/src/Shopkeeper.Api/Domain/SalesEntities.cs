@@ -51,6 +51,7 @@ public sealed class SalePayment
     public PaymentMethod Method { get; set; }
     public decimal Amount { get; set; }
     public string? Reference { get; set; }
+    public decimal? CashTendered { get; set; }
     public Instant CreatedAtUtc { get; set; } = SystemClock.Instance.GetCurrentInstant();
 
     public Sale Sale { get; set; } = default!;

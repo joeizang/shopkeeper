@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CreditCard
@@ -79,12 +80,16 @@ fun ShopkeeperApp(skipOnboardingForTests: Boolean = false) {
 
     ShopkeeperBackground(modifier = Modifier.fillMaxSize()) {
         if (!skipOnboardingForTests && !onboardingCompleted) {
-            OnboardingScreen(onComplete = { onboardingCompleted = true })
+            Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+                OnboardingScreen(onComplete = { onboardingCompleted = true })
+            }
             return@ShopkeeperBackground
         }
 
         if (!isAuthenticated) {
-            AuthScreen()
+            Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+                AuthScreen()
+            }
             return@ShopkeeperBackground
         }
 

@@ -19,6 +19,7 @@
 		B10000000000000000001032 /* AuthFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000132 /* AuthFlowUITests.swift */; };
 		B10000000000000000001033 /* InventoryFlowUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000133 /* InventoryFlowUITests.swift */; };
 		B10000000000000000001034 /* SalesCreditsReportsUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000134 /* SalesCreditsReportsUITests.swift */; };
+		B10000000000000000001035 /* SyncProfileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000135 /* SyncProfileUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 		B10000000000000000000132 /* AuthFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthFlowUITests.swift; sourceTree = "<group>"; };
 		B10000000000000000000133 /* InventoryFlowUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InventoryFlowUITests.swift; sourceTree = "<group>"; };
 		B10000000000000000000134 /* SalesCreditsReportsUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SalesCreditsReportsUITests.swift; sourceTree = "<group>"; };
+		B10000000000000000000135 /* SyncProfileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncProfileUITests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -113,6 +115,7 @@
 				B10000000000000000000132 /* AuthFlowUITests.swift */,
 				B10000000000000000000133 /* InventoryFlowUITests.swift */,
 				B10000000000000000000134 /* SalesCreditsReportsUITests.swift */,
+				B10000000000000000000135 /* SyncProfileUITests.swift */,
 			);
 			path = ShopkeeperIOSUITests;
 			sourceTree = "<group>";
@@ -244,6 +247,7 @@
 				B10000000000000000001031 /* BaseUITestCase.swift in Sources */,
 				B10000000000000000001033 /* InventoryFlowUITests.swift in Sources */,
 				B10000000000000000001034 /* SalesCreditsReportsUITests.swift in Sources */,
+				B10000000000000000001035 /* SyncProfileUITests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

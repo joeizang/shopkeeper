@@ -38,6 +38,21 @@ data class SaleEntity(
     val updatedAtUtcIso: String
 )
 
+@Entity(tableName = "receipt_files")
+data class ReceiptFileEntity(
+    @PrimaryKey val key: String,
+    val localSaleId: String,
+    val serverSaleId: String?,
+    val receiptKind: String,
+    val version: String,
+    val saleNumber: String,
+    val filePath: String,
+    val sourceJson: String,
+    val status: String,
+    val generatedAtUtcIso: String,
+    val updatedAtUtcIso: String
+)
+
 @Entity(tableName = "sync_queue")
 data class SyncQueueEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

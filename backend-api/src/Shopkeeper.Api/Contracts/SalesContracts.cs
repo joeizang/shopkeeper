@@ -5,7 +5,7 @@ namespace Shopkeeper.Api.Contracts;
 
 public sealed record SaleLineRequest(Guid InventoryItemId, int Quantity, decimal UnitPrice);
 
-public sealed record SalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference);
+public sealed record SalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference, decimal? CashTendered);
 
 public sealed record CreateSaleRequest(
     string? CustomerName,
@@ -17,7 +17,13 @@ public sealed record CreateSaleRequest(
     List<SalePaymentRequest>? InitialPayments,
     string? ClientRequestId = null);
 
-public sealed record AddSalePaymentRequest(PaymentMethod Method, decimal Amount, string? Reference, string? Note, string? ClientRequestId = null);
+public sealed record AddSalePaymentRequest(
+    PaymentMethod Method,
+    decimal Amount,
+    string? Reference,
+    decimal? CashTendered,
+    string? Note,
+    string? ClientRequestId = null);
 
 public sealed record SaleLineView(Guid Id, Guid InventoryItemId, string ProductNameSnapshot, int Quantity, decimal UnitPrice, decimal LineTotal);
 public sealed record SalePaymentView(Guid Id, string Method, decimal Amount, string? Reference, Instant CreatedAtUtc);
@@ -41,6 +47,8 @@ public sealed record SaleDetailResponse(
     IReadOnlyList<SalePaymentView> Payments);
 
 public sealed record ReceiptLineView(string ProductName, int Quantity, decimal UnitPrice, decimal LineTotal);
+public sealed record OwnerReceiptLineView(string ProductName, int Quantity, decimal UnitPrice, decimal CostPrice, decimal LineTotal, decimal LineProfit);
+public sealed record ReceiptPaymentView(PaymentMethod Method, decimal Amount, string? Reference, decimal? CashTendered, decimal? ChangeDue);
 
 public sealed record ReceiptView(
     Guid SaleId,
@@ -54,5 +62,30 @@ public sealed record ReceiptView(
     decimal TotalAmount,
     decimal PaidAmount,
     decimal OutstandingAmount,
+    decimal? TotalCashAmount,
+    decimal? TotalCashTendered,
+    decimal? ChangeDue,
     List<ReceiptLineView> Lines,
-    List<SalePaymentRequest> Payments);
+    List<ReceiptPaymentView> Payments);
+
+public sealed record OwnerReceiptView(
+    Guid SaleId,
+    string SaleNumber,
+    Instant CreatedAtUtc,
+    string ShopName,
+    string? CustomerName,
+    string CreatedByName,
+    decimal Subtotal,
+    decimal VatAmount,
+    decimal DiscountAmount,
+    decimal TotalAmount,
+    decimal PaidAmount,
+    decimal OutstandingAmount,
+    decimal? TotalCashAmount,
+    decimal? TotalCashTendered,
+    decimal? ChangeDue,
+    decimal TotalCogs,
+    decimal GrossProfit,
+    decimal GrossMarginPct,
+    List<OwnerReceiptLineView> Lines,
+    List<ReceiptPaymentView> Payments);

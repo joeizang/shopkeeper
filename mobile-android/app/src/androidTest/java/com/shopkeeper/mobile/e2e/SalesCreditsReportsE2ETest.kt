@@ -37,14 +37,15 @@ class SalesCreditsReportsE2ETest : BaseE2ETest() {
         clickTag(ShopkeeperTestTags.SALES_ADD_PAYMENT_SPLIT)
         enterText(ShopkeeperTestTags.SALES_DUE_DATE, dueDate)
         clickTag(ShopkeeperTestTags.SALES_SAVE)
+        assertTextVisible("Sale saved", timeoutMillis = 20_000)
 
         clickTag(ShopkeeperTestTags.NAV_CREDIT)
-        waitForTag(ShopkeeperTestTags.CREDITS_AMOUNT)
+        waitForTag(ShopkeeperTestTags.CREDITS_DROPDOWN, timeoutMillis = 20_000)
         enterText(ShopkeeperTestTags.CREDITS_AMOUNT, "5000")
         enterText(ShopkeeperTestTags.CREDITS_REFERENCE, "E2E-TRX-900")
         enterText(ShopkeeperTestTags.CREDITS_NOTES, "Instrumentation repayment")
         clickTag(ShopkeeperTestTags.CREDITS_SUBMIT)
-        assertTextVisible("Repayment saved")
+        assertTextVisible("Repayment saved", timeoutMillis = 20_000)
 
         clickTag(ShopkeeperTestTags.NAV_REPORTS)
         waitForTag(ShopkeeperTestTags.REPORTS_LOAD)

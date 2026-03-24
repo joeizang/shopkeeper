@@ -170,7 +170,8 @@ data class SaleLineRequest(
 data class SalePaymentRequest(
     val method: Int,
     val amount: Double,
-    val reference: String?
+    val reference: String?,
+    val cashTendered: Double?
 )
 
 data class CreateSaleRequest(
@@ -188,6 +189,116 @@ data class CreateSaleResponse(
     val saleNumber: String,
     val totalAmount: Double,
     val outstandingAmount: Double
+)
+
+data class AddSalePaymentRequest(
+    val method: Int,
+    val amount: Double,
+    val reference: String?,
+    val cashTendered: Double?,
+    val note: String? = null
+)
+
+data class SaleDetailLineDto(
+    val id: String,
+    val inventoryItemId: String,
+    val productNameSnapshot: String,
+    val quantity: Int,
+    val unitPrice: Double,
+    val lineTotal: Double
+)
+
+data class SaleDetailPaymentDto(
+    val id: String,
+    val method: String,
+    val amount: Double,
+    val reference: String?,
+    val createdAtUtc: String
+)
+
+data class SaleDetailResponseDto(
+    val id: String,
+    val saleNumber: String,
+    val customerName: String?,
+    val customerPhone: String?,
+    val subtotal: Double,
+    val vatAmount: Double,
+    val discountAmount: Double,
+    val totalAmount: Double,
+    val outstandingAmount: Double,
+    val status: String,
+    val isCredit: Boolean,
+    val dueDateUtc: String?,
+    val isVoided: Boolean,
+    val updatedAtUtc: String,
+    val lines: List<SaleDetailLineDto>,
+    val payments: List<SaleDetailPaymentDto>
+)
+
+data class ReceiptLineViewDto(
+    val productName: String,
+    val quantity: Int,
+    val unitPrice: Double,
+    val lineTotal: Double
+)
+
+data class ReceiptPaymentViewDto(
+    val method: Int,
+    val amount: Double,
+    val reference: String?,
+    val cashTendered: Double?,
+    val changeDue: Double?
+)
+
+data class ReceiptViewDto(
+    val saleId: String,
+    val saleNumber: String,
+    val createdAtUtc: String,
+    val shopName: String,
+    val customerName: String?,
+    val subtotal: Double,
+    val vatAmount: Double,
+    val discountAmount: Double,
+    val totalAmount: Double,
+    val paidAmount: Double,
+    val outstandingAmount: Double,
+    val totalCashAmount: Double?,
+    val totalCashTendered: Double?,
+    val changeDue: Double?,
+    val lines: List<ReceiptLineViewDto>,
+    val payments: List<ReceiptPaymentViewDto>
+)
+
+data class OwnerReceiptLineViewDto(
+    val productName: String,
+    val quantity: Int,
+    val unitPrice: Double,
+    val costPrice: Double,
+    val lineTotal: Double,
+    val lineProfit: Double
+)
+
+data class OwnerReceiptViewDto(
+    val saleId: String,
+    val saleNumber: String,
+    val createdAtUtc: String,
+    val shopName: String,
+    val customerName: String?,
+    val createdByName: String,
+    val subtotal: Double,
+    val vatAmount: Double,
+    val discountAmount: Double,
+    val totalAmount: Double,
+    val paidAmount: Double,
+    val outstandingAmount: Double,
+    val totalCashAmount: Double?,
+    val totalCashTendered: Double?,
+    val changeDue: Double?,
+    val totalCogs: Double,
+    val grossProfit: Double,
+    val grossMarginPct: Double,
+    val lines: List<OwnerReceiptLineViewDto>,
+    val payments: List<ReceiptPaymentViewDto>
 )
 
 data class CreditRepaymentRequest(

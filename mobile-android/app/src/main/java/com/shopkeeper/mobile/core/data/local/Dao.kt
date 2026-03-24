@@ -36,6 +36,21 @@ interface SalesDao {
 }
 
 @Dao
+interface ReceiptDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(receipt: ReceiptFileEntity)
+
+    @Query("SELECT * FROM receipt_files WHERE localSaleId = :localSaleId ORDER BY receiptKind ASC")
+    suspend fun getByLocalSale(localSaleId: String): List<ReceiptFileEntity>
+
+    @Query("SELECT * FROM receipt_files WHERE localSaleId = :localSaleId AND receiptKind = :receiptKind LIMIT 1")
+    suspend fun getByLocalSaleAndKind(localSaleId: String, receiptKind: String): ReceiptFileEntity?
+
+    @Query("SELECT * FROM receipt_files WHERE serverSaleId = :serverSaleId ORDER BY updatedAtUtcIso DESC LIMIT 1")
+    suspend fun getByServerSaleId(serverSaleId: String): ReceiptFileEntity?
+}
+
+@Dao
 interface SyncDao {
     @Insert
     suspend fun enqueue(change: SyncQueueEntity)

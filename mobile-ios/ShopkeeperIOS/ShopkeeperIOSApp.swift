@@ -14,6 +14,14 @@ struct ShopkeeperIOSApp: App {
                 UserDefaults.standard.removeObject(forKey: "ios_refresh_token")
                 UserDefaults.standard.removeObject(forKey: "ios_shop_id")
                 UserDefaults.standard.removeObject(forKey: "ios_role")
+                // Clear draft/form state so stale IDs from previous seeds don't persist
+                UserDefaults.standard.removeObject(forKey: "ios_credit_repayment_sale_id")
+                UserDefaults.standard.removeObject(forKey: "ios_credit_repayment_amount")
+                UserDefaults.standard.removeObject(forKey: "ios_credit_repayment_method")
+                UserDefaults.standard.removeObject(forKey: "ios_credit_repayment_reference")
+                UserDefaults.standard.removeObject(forKey: "ios_credit_repayment_notes")
+                UserDefaults.standard.removeObject(forKey: "ios_inventory_draft")
+                UserDefaults.standard.removeObject(forKey: "ios_sale_draft")
             }
             if arguments.contains("-skipOnboarding") {
                 UserDefaults.standard.set(true, forKey: "onboarding_completed")

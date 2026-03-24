@@ -1,3 +1,4 @@
+import PDFKit
 import SwiftUI
 import UIKit
 
@@ -468,6 +469,8 @@ struct SalesView: View {
     @State private var showingComposer = false
     @State private var sharedReceiptURL: URL?
     @State private var showingShareSheet = false
+    @State private var ownerReceiptPreview: ReceiptPreviewPayload?
+    @State private var paymentSale: SaleDetailResponse?
 
     var body: some View {
         ScreenColumn {
@@ -522,31 +525,35 @@ struct SalesView: View {
                             Text("VAT \(currency(sale.vatAmount)) \u{2022} Discount \(currency(sale.discountAmount)) \u{2022} Outstanding \(currency(sale.outstandingAmount))")
                                 .font(.skBodySmall)
                                 .foregroundStyle(Color.skOnSurfaceVariant)
+                            if sale.outstandingAmount > 0, !sale.isVoided {
+                                SoftButton(title: "Add Payment", action: {
+                                    paymentSale = sale
+                                }, fullWidth: true, accessibilityId: "sales.existing.addPayment.\(sale.id)")
+                            }
                         }
                     }
                 }
             }
 
-            // Last receipt
-            if let receipt = sessionStore.lastReceipt {
-                SectionTitle(title: "Last Receipt")
+            if let customerReceipt = sessionStore.lastCustomerReceipt {
+                SectionTitle(title: "Latest Receipts")
                 AccentCard {
                     VStack(alignment: .leading, spacing: SKSpacing.sm) {
-                        Text(receipt.saleNumber)
+                        Text(customerReceipt.saleNumber)
                             .font(.skTitleMedium)
                             .foregroundStyle(Color.skOnSurface)
-                        Text("Shop: \(receipt.shopName)")
-                            .font(.skBodyMedium)
-                            .foregroundStyle(Color.skOnSurfaceVariant)
-                        Text("Paid: \(currency(receipt.paidAmount)) \u{2022} Outstanding: \(currency(receipt.outstandingAmount))")
+                        Text(customerReceipt.version == .local ? "Local provisional receipt" : "Canonical synced receipt")
                             .font(.skBodySmall)
-                            .foregroundStyle(Color.skSecondary)
-                        SoftButton(title: "Share Receipt PDF") {
-                            do {
-                                sharedReceiptURL = try generateReceiptPdf(receipt)
-                                showingShareSheet = sharedReceiptURL != nil
-                            } catch {
-                                sessionStore.statusMessage = error.localizedDescription
+                            .foregroundStyle(Color.skOnSurfaceVariant)
+                        HStack(spacing: SKSpacing.md) {
+                            SoftButton(title: "Share Customer Receipt") {
+                                sharedReceiptURL = customerReceipt.fileURL
+                                showingShareSheet = true
+                            }
+                            if sessionStore.capabilities.canViewReports, let ownerReceipt = sessionStore.lastOwnerReceipt {
+                                SoftButton(title: "View Owner Receipt") {
+                                    ownerReceiptPreview = ReceiptPreviewPayload(url: ownerReceipt.fileURL, title: ownerReceipt.saleNumber)
+                                }
                             }
                         }
                     }
@@ -556,6 +563,7 @@ struct SalesView: View {
             Spacer().frame(height: 80)
         }
         .navigationBarHidden(true)
+        .accessibilityIdentifier("sales.root")
         .sheet(isPresented: $showingComposer) {
             SaleComposerView()
                 .environmentObject(sessionStore)
@@ -564,13 +572,135 @@ struct SalesView: View {
             sharedReceiptURL = nil
         }) {
             if let url = sharedReceiptURL {
-                ShareSheet(url: url, title: "Share Receipt")
+                ShareSheet(url: url, title: "Share Customer Receipt")
             }
+        }
+        .sheet(item: $ownerReceiptPreview) { preview in
+            OwnerReceiptPreviewSheet(payload: preview)
+        }
+        .sheet(item: $paymentSale) { sale in
+            ExistingSalePaymentSheet(sale: sale)
+                .environmentObject(sessionStore)
         }
         .task {
             await sessionStore.refreshTodaysSales()
+            await sessionStore.refreshRecentSales()
             if sessionStore.inventory.isEmpty {
                 await sessionStore.refreshInventory()
+            }
+        }
+    }
+}
+
+struct ExistingSalePaymentSheet: View {
+    let sale: SaleDetailResponse
+
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var sessionStore: SessionStore
+
+    @State private var amount = ""
+    @State private var selectedPaymentMethod: PaymentMethodOption = .cash
+    @State private var paymentReference = ""
+    @State private var paymentCashTendered = ""
+    @State private var localStatus: String?
+
+    private var splitChangeDue: Double? {
+        guard selectedPaymentMethod == .cash,
+              let amountValue = Double(amount), amountValue > 0,
+              let tendered = Double(paymentCashTendered)
+        else { return nil }
+        return max(0, tendered - amountValue)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScreenColumn {
+                ScreenHeader(title: "Add Payment", subtitle: sale.saleNumber)
+
+                AccentCard {
+                    VStack(alignment: .leading, spacing: SKSpacing.md) {
+                        SKMetricRow(title: "Sale Total", value: currency(sale.totalAmount), note: sale.customerName ?? "Walk-in Customer")
+                        Divider().overlay(Color.skOutline.opacity(0.3))
+                        SKMetricRow(title: "Outstanding", value: currency(sale.outstandingAmount), note: sale.isCredit ? "Credit balance" : "Remaining balance")
+                    }
+                }
+
+                AccentCard {
+                    VStack(spacing: SKSpacing.md) {
+                        SectionTitle(title: "Payment Details")
+                        HStack {
+                            Text("Method")
+                                .font(.skLabelSmall)
+                                .foregroundStyle(Color.skOnSurfaceVariant)
+                            Spacer()
+                            Picker("", selection: $selectedPaymentMethod) {
+                                ForEach(PaymentMethodOption.allCases) { method in
+                                    Text(method.title).tag(method)
+                                }
+                            }
+                            .tint(.skPrimary)
+                        }
+                        SKTextField(label: "Amount", text: $amount, isDecimal: true, accessibilityId: "sales.existing.amount")
+                        if selectedPaymentMethod == .cash {
+                            SKTextField(label: "Cash received", text: $paymentCashTendered, isDecimal: true, accessibilityId: "sales.existing.cashTendered")
+                            if let splitChangeDue {
+                                SKMetricRow(title: "Change Due", value: currency(splitChangeDue), note: "Calculated from this payment")
+                            }
+                        }
+                        SKTextField(label: "Reference", text: $paymentReference, accessibilityId: "sales.existing.reference")
+                    }
+                }
+
+                if let localStatus, !localStatus.isEmpty {
+                    StatusBanner(message: localStatus, kind: .info)
+                }
+
+                HStack(spacing: SKSpacing.md) {
+                    SoftButton(title: "Cancel", action: { dismiss() }, fullWidth: true, accessibilityId: "sales.existing.cancel")
+                    BrickButton(title: "Save Payment", action: {
+                        Task {
+                            let amountValue = Double(amount) ?? 0
+                            guard amountValue > 0 else {
+                                localStatus = "Enter a valid payment amount."
+                                return
+                            }
+                            let tendered = selectedPaymentMethod == .cash ? Double(paymentCashTendered) : nil
+                            if selectedPaymentMethod == .cash, let tendered {
+                                guard tendered >= amountValue else {
+                                    localStatus = "Cash received must be at least the payment amount."
+                                    return
+                                }
+                            } else if selectedPaymentMethod == .cash {
+                                localStatus = "Enter the cash received for this payment."
+                                return
+                            }
+
+                            let bundle = await sessionStore.addSalePayment(
+                                saleId: sale.id,
+                                amount: amountValue,
+                                method: selectedPaymentMethod,
+                                reference: paymentReference,
+                                cashTendered: tendered
+                            )
+                            if bundle != nil || sessionStore.statusMessage == "Payment added and receipts regenerated." || sessionStore.statusMessage == "Payment added. One or more receipts need regeneration." {
+                                dismiss()
+                            } else {
+                                localStatus = sessionStore.statusMessage ?? "Could not add payment."
+                            }
+                        }
+                    }, fullWidth: true, accessibilityId: "sales.existing.save")
+                }
+            }
+            .navigationTitle("Add Payment")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { dismiss() }
+                        .foregroundStyle(Color.skOnSurfaceVariant)
+                }
+            }
+            .onAppear {
+                amount = decimalString(sale.outstandingAmount)
             }
         }
     }
@@ -579,6 +709,7 @@ struct SalesView: View {
 // MARK: - Sale Composer
 
 struct SaleComposerView: View {
+
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var sessionStore: SessionStore
 
@@ -590,6 +721,7 @@ struct SaleComposerView: View {
     @State private var selectedPaymentMethod: PaymentMethodOption = .cash
     @State private var paymentAmount = ""
     @State private var paymentReference = ""
+    @State private var paymentCashTendered = ""
     @State private var payments: [SalePaymentRequest] = []
     @State private var applyShopDiscount = false
     @State private var isCredit = false
@@ -621,6 +753,13 @@ struct SaleComposerView: View {
     private var totalAmount: Double { max(0, subtotal - discountAmount) + vatAmount }
     private var paidAmount: Double { payments.reduce(0) { $0 + $1.amount } }
     private var outstandingAmount: Double { max(0, totalAmount - paidAmount) }
+    private var splitChangeDue: Double? {
+        guard selectedPaymentMethod == .cash,
+              let amount = Double(paymentAmount), amount > 0,
+              let tendered = Double(paymentCashTendered)
+        else { return nil }
+        return max(0, tendered - amount)
+    }
 
     private var saleDraft: SaleComposerDraft {
         SaleComposerDraft(
@@ -628,6 +767,7 @@ struct SaleComposerView: View {
             search: search, lines: lines,
             selectedPaymentMethod: selectedPaymentMethod,
             paymentAmount: paymentAmount, paymentReference: paymentReference,
+            paymentCashTendered: paymentCashTendered,
             payments: payments, applyShopDiscount: applyShopDiscount,
             isCredit: isCredit, dueDate: dueDate
         )
@@ -801,6 +941,12 @@ struct SaleComposerView: View {
                             .tint(.skPrimary)
                         }
                         SKTextField(label: "Amount", text: $paymentAmount, isDecimal: true, accessibilityId: "sales.form.paymentAmount")
+                        if selectedPaymentMethod == .cash {
+                            SKTextField(label: "Cash received", text: $paymentCashTendered, isDecimal: true, accessibilityId: "sales.form.cashTendered")
+                            if let splitChangeDue {
+                                SKMetricRow(title: "Split Change Due", value: currency(splitChangeDue), note: "Calculated from the cash split")
+                            }
+                        }
                         SKTextField(label: "Reference", text: $paymentReference, accessibilityId: "sales.form.paymentReference")
                         Menu {
                             Button("Use Camera") { pendingScanAction = .reference; imageSource = .camera }
@@ -818,23 +964,45 @@ struct SaleComposerView: View {
                         }
                         SoftButton(title: "Add Payment", action: {
                             let amount = Double(paymentAmount) ?? 0
-                            guard amount > 0 else { return }
+                            guard amount > 0 else {
+                                localStatus = "Enter a valid payment amount."
+                                return
+                            }
+                            let cashTendered = selectedPaymentMethod == .cash ? Double(paymentCashTendered) : nil
+                            if selectedPaymentMethod == .cash, let cashTendered {
+                                guard cashTendered >= amount else {
+                                    localStatus = "Cash received must be at least the split amount."
+                                    return
+                                }
+                            } else if selectedPaymentMethod == .cash {
+                                localStatus = "Enter the cash received for this split."
+                                return
+                            }
                             payments.append(SalePaymentRequest(
                                 method: selectedPaymentMethod.rawValue,
                                 amount: amount,
-                                reference: nullable(paymentReference)
+                                reference: nullable(paymentReference),
+                                cashTendered: cashTendered
                             ))
                             paymentAmount = ""
                             paymentReference = ""
+                            paymentCashTendered = ""
                             selectedPaymentMethod = .cash
                         }, fullWidth: true, accessibilityId: "sales.form.addPaymentSplit")
 
                         if !payments.isEmpty {
                             ForEach(payments) { payment in
                                 HStack {
-                                    Text(payment.paymentMethod.title)
-                                        .font(.skBodyMedium)
-                                        .foregroundStyle(Color.skOnSurface)
+                                    VStack(alignment: .leading, spacing: SKSpacing.xs) {
+                                        Text(payment.paymentMethod.title)
+                                            .font(.skBodyMedium)
+                                            .foregroundStyle(Color.skOnSurface)
+                                        if let cashTendered = payment.cashTendered {
+                                            Text("Cash received \(currency(cashTendered)) • Change \(currency(max(0, cashTendered - payment.amount)))")
+                                                .font(.skBodySmall)
+                                                .foregroundStyle(Color.skOnSurfaceVariant)
+                                        }
+                                    }
                                     Spacer()
                                     Text(currency(payment.amount))
                                         .font(.skMoney)
@@ -871,21 +1039,28 @@ struct SaleComposerView: View {
                     title: "Create Sale",
                     action: {
                         Task {
-                            let receipt = await sessionStore.createSale(
+                            if payments.contains(where: { $0.method == PaymentMethodOption.cash.rawValue && (($0.cashTendered ?? 0) < $0.amount) }) {
+                                localStatus = "Every cash split must include enough cash received."
+                                return
+                            }
+                            if outstandingAmount > 0 && !isCredit {
+                                localStatus = "Enable credit and set a due date for any unpaid balance."
+                                return
+                            }
+                            let receiptBundle = await sessionStore.createSale(
                                 customerName: customerName,
                                 customerPhone: customerPhone,
                                 applyShopDiscount: applyShopDiscount,
-                                dueDate: isCredit ? dueDate : nil,
+                                dueDate: (isCredit || outstandingAmount > 0) ? dueDate : nil,
                                 lines: lines,
                                 payments: payments
                             )
-                            if receipt != nil {
+                            if let receiptBundle {
                                 saleDraftData = ""
+                                localStatus = receiptBundle.hasFailures ? "Sale saved. One or more receipts need regeneration." : nil
                                 let generator = UINotificationFeedbackGenerator()
                                 generator.notificationOccurred(.success)
                                 showCelebration = true
-                            } else {
-                                dismiss()
                             }
                         }
                     },
@@ -919,6 +1094,7 @@ struct SaleComposerView: View {
                     selectedPaymentMethod = draft.selectedPaymentMethod
                     paymentAmount = draft.paymentAmount
                     paymentReference = draft.paymentReference
+                    paymentCashTendered = draft.paymentCashTendered
                     payments = draft.payments
                     applyShopDiscount = draft.applyShopDiscount
                     isCredit = draft.isCredit
@@ -967,7 +1143,7 @@ struct CreditsView: View {
     @State private var localStatus: String?
 
     private var openCredits: [CreditAccountView] {
-        sessionStore.credits.filter { $0.outstandingAmount > 0 && !$0.status.lowercased().contains("settled") }
+        sessionStore.credits.filter { $0.outstandingAmount > 0 && !$0.isSettled }
     }
 
     private var method: PaymentMethodOption {
@@ -1008,7 +1184,7 @@ struct CreditsView: View {
                 // Selected credit info
                 AccentCard {
                     VStack(spacing: SKSpacing.md) {
-                        SKMetricRow(title: "Outstanding", value: currency(detail.account.outstandingAmount), note: detail.account.status)
+                        SKMetricRow(title: "Outstanding", value: currency(detail.account.outstandingAmount), note: detail.account.statusLabel)
                         Divider().overlay(Color.skOutline.opacity(0.3))
                         HStack {
                             Text("Due")
@@ -1122,6 +1298,7 @@ struct CreditsView: View {
             Spacer().frame(height: 80)
         }
         .navigationBarHidden(true)
+        .accessibilityIdentifier("credits.root")
         .task {
             await sessionStore.refreshCredits()
             if selectedSaleId.isEmpty, let first = openCredits.first {
@@ -1364,6 +1541,7 @@ struct ReportsView: View {
             Spacer().frame(height: 80)
         }
         .navigationBarHidden(true)
+        .accessibilityIdentifier("reports.root")
         .sheet(isPresented: $showingShareSheet, onDismiss: { sharedFileURL = nil }) {
             if let url = sharedFileURL {
                 ShareSheet(url: url, title: "Share Report")
@@ -1453,6 +1631,9 @@ struct SyncView: View {
 
     var body: some View {
         ScreenColumn {
+            Color.clear.frame(height: 0)
+                .accessibilityIdentifier("sync.root")
+
             ScreenHeader(title: "Sync", subtitle: "Manage data synchronization")
 
             // Status
@@ -1467,7 +1648,7 @@ struct SyncView: View {
 
             BrickButton(title: "Run Sync Now", action: {
                 Task { await sessionStore.runManualSync() }
-            })
+            }, accessibilityId: "sync.runNow")
 
             // Conflicts
             SectionTitle(title: "Conflicts")
@@ -1634,10 +1815,11 @@ struct ProfileView: View {
                                         discountPercent: (Double(discountPercent) ?? 0) / 100
                                     )
                                 }
-                            })
+                            }, accessibilityId: "profile.shopSettings.save")
                         }
                     }
                 }
+                .accessibilityIdentifier("profile.currentShop")
             }
 
             // Staff management
@@ -1787,12 +1969,13 @@ struct ProfileView: View {
                 }, fullWidth: true)
                 SoftButton(title: "Log Out", action: {
                     sessionStore.logout()
-                }, role: .destructive, fullWidth: true)
+                }, role: .destructive, fullWidth: true, accessibilityId: "profile.logout")
             }
 
             Spacer().frame(height: 80)
         }
         .navigationBarHidden(true)
+        .accessibilityIdentifier("profile.root")
         .task {
             if sessionStore.isAuthenticated && sessionStore.sessions.isEmpty {
                 await sessionStore.refreshAll()
@@ -1863,6 +2046,7 @@ private struct SaleComposerDraft: Codable, Equatable {
     let selectedPaymentMethod: PaymentMethodOption
     let paymentAmount: String
     let paymentReference: String
+    let paymentCashTendered: String
     let payments: [SalePaymentRequest]
     let applyShopDiscount: Bool
     let isCredit: Bool
@@ -1948,5 +2132,41 @@ private struct ImagePicker: UIViewControllerRepresentable {
             }
             dismiss()
         }
+    }
+}
+
+
+private struct ReceiptPreviewPayload: Identifiable {
+    let url: URL
+    let title: String
+
+    var id: String { url.path }
+}
+
+private struct OwnerReceiptPreviewSheet: View {
+    let payload: ReceiptPreviewPayload
+
+    var body: some View {
+        NavigationStack {
+            PDFPreview(url: payload.url)
+                .navigationTitle(payload.title)
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+private struct PDFPreview: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> PDFView {
+        let view = PDFView()
+        view.autoScales = true
+        view.displayMode = .singlePageContinuous
+        view.displayDirection = .vertical
+        return view
+    }
+
+    func updateUIView(_ uiView: PDFView, context: Context) {
+        uiView.document = PDFDocument(url: url)
     }
 }

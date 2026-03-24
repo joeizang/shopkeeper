@@ -1,3 +1,4 @@
+import CoreData
 import Foundation
 import SwiftUI
 import UIKit
@@ -259,6 +260,13 @@ struct UpdateStaffMembershipRequest: Encodable {
     let isActive: Bool
 }
 
+struct PaginatedResponse<T: Decodable>: Decodable {
+    let total: Int
+    let page: Int
+    let limit: Int
+    let items: [T]
+}
+
 struct InventoryItemResponse: Decodable, Identifiable {
     let id: String
     let productName: String
@@ -326,12 +334,21 @@ struct SalePaymentRequest: Encodable, Decodable, Identifiable, Hashable {
     let method: Int
     let amount: Double
     let reference: String?
+    let cashTendered: Double?
 
-    var id: String { "\(method)-\(amount)-\(reference ?? "")" }
+    var id: String { "\(method)-\(amount)-\(reference ?? "")-\(cashTendered ?? 0)" }
 
     var paymentMethod: PaymentMethodOption {
         PaymentMethodOption(rawValue: method) ?? .cash
     }
+}
+
+struct AddSalePaymentRequest: Encodable {
+    let method: Int
+    let amount: Double
+    let reference: String?
+    let cashTendered: Double?
+    let note: String?
 }
 
 struct CreateSaleRequest: Encodable {
@@ -351,7 +368,7 @@ struct CreateSaleResponse: Decodable {
     let outstandingAmount: Double
 }
 
-struct SaleDetailLine: Decodable, Identifiable {
+struct SaleDetailLine: Codable, Identifiable {
     let id: String
     let inventoryItemId: String
     let productNameSnapshot: String
@@ -360,7 +377,7 @@ struct SaleDetailLine: Decodable, Identifiable {
     let lineTotal: Double
 }
 
-struct SaleDetailPayment: Decodable, Identifiable {
+struct SaleDetailPayment: Codable, Identifiable {
     let id: String
     let method: String
     let amount: Double
@@ -368,7 +385,7 @@ struct SaleDetailPayment: Decodable, Identifiable {
     let createdAtUtc: String
 }
 
-struct SaleDetailResponse: Decodable, Identifiable {
+struct SaleDetailResponse: Codable, Identifiable {
     let id: String
     let saleNumber: String
     let customerName: String?
@@ -407,8 +424,165 @@ struct ReceiptView: Decodable {
     let totalAmount: Double
     let paidAmount: Double
     let outstandingAmount: Double
+    let totalCashAmount: Double
+    let totalCashTendered: Double
+    let changeDue: Double
     let lines: [ReceiptLineView]
-    let payments: [SalePaymentRequest]
+    let payments: [ReceiptPaymentView]
+}
+
+struct ReceiptPaymentView: Decodable, Encodable, Identifiable, Hashable {
+    let method: Int
+    let amount: Double
+    let reference: String?
+    let cashTendered: Double?
+    let changeDue: Double
+
+    var id: String { "\(method)-\(amount)-\(reference ?? "")-\(cashTendered ?? 0)" }
+
+    var paymentMethod: PaymentMethodOption {
+        PaymentMethodOption(rawValue: method) ?? .cash
+    }
+}
+
+struct OwnerReceiptLineView: Decodable, Encodable, Identifiable, Hashable {
+    let productName: String
+    let quantity: Int
+    let unitPrice: Double
+    let unitCost: Double
+    let lineTotal: Double
+    let lineGrossProfit: Double
+
+    var id: String { "\(productName)-\(quantity)-\(unitPrice)-\(unitCost)" }
+    var lineCostTotal: Double { Double(quantity) * unitCost }
+
+    enum CodingKeys: String, CodingKey {
+        case productName
+        case quantity
+        case unitPrice
+        case unitCost = "costPrice"
+        case lineTotal
+        case lineGrossProfit = "lineProfit"
+    }
+}
+
+struct OwnerReceiptView: Decodable, Encodable {
+    let saleId: String
+    let saleNumber: String
+    let createdAtUtc: String
+    let shopName: String
+    let customerName: String?
+    let createdByName: String
+    let subtotal: Double
+    let vatAmount: Double
+    let discountAmount: Double
+    let totalAmount: Double
+    let paidAmount: Double
+    let outstandingAmount: Double
+    let totalCashAmount: Double
+    let totalCashTendered: Double
+    let changeDue: Double
+    let totalCost: Double
+    let grossProfit: Double
+    let grossMarginPercent: Double
+    let lines: [OwnerReceiptLineView]
+    let payments: [ReceiptPaymentView]
+
+    var cashierName: String { createdByName }
+
+    enum CodingKeys: String, CodingKey {
+        case saleId
+        case saleNumber
+        case createdAtUtc
+        case shopName
+        case customerName
+        case createdByName
+        case subtotal
+        case vatAmount
+        case discountAmount
+        case totalAmount
+        case paidAmount
+        case outstandingAmount
+        case totalCashAmount
+        case totalCashTendered
+        case changeDue
+        case totalCost = "totalCogs"
+        case grossProfit
+        case grossMarginPercent = "grossMarginPct"
+        case lines
+        case payments
+    }
+}
+
+enum ReceiptKind: String, Codable {
+    case customer
+    case owner
+}
+
+enum ReceiptVersion: String, Codable {
+    case local
+    case canonical
+}
+
+enum ReceiptGenerationStatus: String, Codable {
+    case ready
+    case failed
+}
+
+struct LocalReceiptLinePayload: Codable, Hashable {
+    let productName: String
+    let quantity: Int
+    let unitPrice: Double
+    let unitCost: Double
+    let lineTotal: Double
+}
+
+struct LocalReceiptPaymentPayload: Codable, Hashable {
+    let method: Int
+    let amount: Double
+    let reference: String?
+    let cashTendered: Double?
+}
+
+struct ReceiptSourcePayload: Codable {
+    let localSaleId: String
+    let saleId: String?
+    let saleNumber: String
+    let createdAtUtc: String
+    let shopName: String
+    let cashierName: String
+    let customerName: String?
+    let subtotal: Double
+    let vatAmount: Double
+    let discountAmount: Double
+    let totalAmount: Double
+    let paidAmount: Double
+    let outstandingAmount: Double
+    let totalCashAmount: Double
+    let totalCashTendered: Double
+    let changeDue: Double
+    let lines: [LocalReceiptLinePayload]
+    let payments: [LocalReceiptPaymentPayload]
+}
+
+struct ReceiptArtifact: Identifiable {
+    let localSaleId: String
+    let kind: ReceiptKind
+    let version: ReceiptVersion
+    let fileURL: URL
+    let saleId: String?
+    let saleNumber: String
+    let generatedAt: Date
+
+    var id: String { "\(localSaleId)-\(kind.rawValue)" }
+}
+
+struct ReceiptBundle {
+    let localSaleId: String
+    let customer: ReceiptArtifact?
+    let owner: ReceiptArtifact?
+
+    var hasFailures: Bool { customer == nil || owner == nil }
 }
 
 struct CreditAccountView: Decodable, Identifiable {
@@ -416,7 +590,18 @@ struct CreditAccountView: Decodable, Identifiable {
     let saleId: String
     let dueDateUtc: String
     let outstandingAmount: Double
-    let status: String
+    let status: Int
+
+    var statusLabel: String {
+        switch status {
+        case 1: return "Open"
+        case 2: return "Settled"
+        case 3: return "Defaulted"
+        default: return "Unknown"
+        }
+    }
+
+    var isSettled: Bool { status == 2 }
 }
 
 struct CreditRepaymentView: Decodable, Identifiable {
@@ -817,7 +1002,8 @@ final class SessionStore: ObservableObject {
     @Published var todaysSalesReport: SalesReportResponse?
     @Published var selectedCreditDetail: CreditDetailResponse?
     @Published var recentSales: [SaleDetailResponse] = []
-    @Published var lastReceipt: ReceiptView?
+    @Published var lastCustomerReceipt: ReceiptArtifact?
+    @Published var lastOwnerReceipt: ReceiptArtifact?
     @Published var syncSummary = SyncSummary(lastPulledAtUtc: nil, lastPushAccepted: 0, lastPullChanges: 0, lastConflictCount: 0)
     @Published var syncConflicts: [SyncConflictView] = []
     @Published var statusMessage: String?
@@ -826,6 +1012,7 @@ final class SessionStore: ObservableObject {
 
     private let api = APIClient.shared
     private let defaults = UserDefaults.standard
+    private let receiptStore = ReceiptMetadataStore.shared
 
     var isAuthenticated: Bool { auth != nil }
     var role: ShopRole { currentShop?.shopRole ?? ShopRole(rawValue: auth?.role ?? "") ?? .owner }
@@ -836,7 +1023,7 @@ final class SessionStore: ObservableObject {
         let sales = todaysSalesReport
         return DashboardSnapshot(
             inventoryItems: inventory.count,
-            openCredits: credits.filter { !$0.status.lowercased().contains("settled") && $0.outstandingAmount > 0 }.count,
+            openCredits: credits.filter { !$0.isSettled && $0.outstandingAmount > 0 }.count,
             totalInventoryUnits: inventory.reduce(0) { $0 + $1.quantity },
             lowStockItems: inventory.filter { $0.quantity <= 2 }.count,
             totalInventoryWorth: inventory.reduce(0) { $0 + ($1.costPrice * Double($1.quantity)) },
@@ -851,6 +1038,7 @@ final class SessionStore: ObservableObject {
     func bootstrap() async {
         restoreTheme()
         restoreSession()
+        restoreRecentSales()
         guard isAuthenticated else { return }
         await refreshAll()
     }
@@ -912,7 +1100,9 @@ final class SessionStore: ObservableObject {
         todaysSalesReport = nil
         selectedCreditDetail = nil
         recentSales = []
-        lastReceipt = nil
+        persistRecentSales()
+        lastCustomerReceipt = nil
+        lastOwnerReceipt = nil
         syncSummary = SyncSummary(lastPulledAtUtc: nil, lastPushAccepted: 0, lastPullChanges: 0, lastConflictCount: 0)
         removeStoredSession()
     }
@@ -923,12 +1113,12 @@ final class SessionStore: ObservableObject {
         await perform { [self] in
             async let loadedShops: [ShopView] = api.request("api/v1/shops/me", accessToken: accessToken)
             async let loadedProfile: AccountProfile = api.request("api/v1/account/me", accessToken: accessToken)
-            async let loadedInventory: [InventoryItemResponse] = capabilities.canManageInventory
+            async let loadedInventoryPage: PaginatedResponse<InventoryItemResponse>? = capabilities.canManageInventory
                 ? api.request("api/v1/inventory/items", accessToken: accessToken)
-                : []
-            async let loadedCredits: [CreditAccountView] = capabilities.canManageSales
+                : nil
+            async let loadedCreditsPage: PaginatedResponse<CreditAccountView>? = capabilities.canManageSales
                 ? api.request("api/v1/credits", accessToken: accessToken)
-                : []
+                : nil
             async let loadedSessions: [SessionView] = api.request("api/v1/account/sessions", accessToken: accessToken)
             async let loadedIdentities: [LinkedIdentityView] = api.request("api/v1/account/linked-identities", accessToken: accessToken)
             async let loadedReportJobs: [ReportJobView] = capabilities.canViewReports
@@ -947,14 +1137,21 @@ final class SessionStore: ObservableObject {
             let resolvedShops = try await loadedShops
             shops = resolvedShops
             profile = try await loadedProfile
-            inventory = try await loadedInventory
-            credits = try await loadedCredits
+            inventory = try await loadedInventoryPage?.items ?? []
+            credits = try await loadedCreditsPage?.items ?? []
             sessions = try await loadedSessions
             linkedIdentities = try await loadedIdentities
             reportJobs = try await loadedReportJobs
             reportFiles = try await loadedReportFiles
             expenses = try await loadedExpenses
             todaysSalesReport = try await salesReport
+            if capabilities.canManageSales {
+                recentSales = try await api.request("api/v1/sales?limit=20", accessToken: accessToken)
+                persistRecentSales()
+            } else {
+                recentSales = []
+                persistRecentSales()
+            }
 
             let selectedShopId = auth?.shopId ?? defaults.string(forKey: "ios_shop_id")
             currentShop = resolvedShops.first(where: { $0.id == selectedShopId }) ?? resolvedShops.first
@@ -973,7 +1170,8 @@ final class SessionStore: ObservableObject {
     func refreshInventory() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageInventory else { return }
         await perform { [self] in
-            inventory = try await api.request("api/v1/inventory/items", accessToken: accessToken)
+            let page: PaginatedResponse<InventoryItemResponse> = try await api.request("api/v1/inventory/items", accessToken: accessToken)
+            inventory = page.items
         }
     }
 
@@ -1190,48 +1388,203 @@ final class SessionStore: ObservableObject {
         dueDate: Date?,
         lines: [SaleLineDraft],
         payments: [SalePaymentRequest]
-    ) async -> ReceiptView? {
+    ) async -> ReceiptBundle? {
         guard let accessToken = auth?.accessToken, let shop = currentShop else { return nil }
         guard !lines.isEmpty else {
             statusMessage = "Add at least one item to the sale."
             return nil
         }
 
-        var createdReceipt: ReceiptView?
+        var createdBundle: ReceiptBundle?
         await perform { [self] in
             let subtotal = lines.reduce(0) { $0 + $1.lineTotal }
             let discountAmount = applyShopDiscount ? subtotal * shop.defaultDiscountPercent : 0
-            let response: CreateSaleResponse = try await api.request(
-                "api/v1/sales",
+            let vatAmount = shop.vatEnabled ? max(0, subtotal - discountAmount) * shop.vatRate : 0
+            let totalAmount = max(0, subtotal - discountAmount) + vatAmount
+            let paidAmount = payments.reduce(0) { $0 + $1.amount }
+            let outstandingAmount = max(0, totalAmount - paidAmount)
+            let localSaleId = UUID().uuidString
+            let localSaleNumber = "LOCAL-\(Int(Date().timeIntervalSince1970))"
+            let inventoryLookup = Dictionary(uniqueKeysWithValues: inventory.map { ($0.id, $0) })
+            let receiptLines = lines.map { line in
+                LocalReceiptLinePayload(
+                    productName: line.productName,
+                    quantity: line.quantity,
+                    unitPrice: line.unitPrice,
+                    unitCost: inventoryLookup[line.inventoryItemId]?.costPrice ?? 0,
+                    lineTotal: line.lineTotal
+                )
+            }
+            let receiptPayments = payments.map {
+                LocalReceiptPaymentPayload(
+                    method: $0.method,
+                    amount: $0.amount,
+                    reference: $0.reference,
+                    cashTendered: $0.cashTendered
+                )
+            }
+            let cashSummary = aggregateCashSummary(receiptPayments)
+            let baseReceipt = ReceiptSourcePayload(
+                localSaleId: localSaleId,
+                saleId: nil,
+                saleNumber: localSaleNumber,
+                createdAtUtc: backendDateTime(Date()),
+                shopName: shop.name,
+                cashierName: profile?.fullName ?? "Unknown User",
+                customerName: nullable(customerName),
+                subtotal: subtotal,
+                vatAmount: vatAmount,
+                discountAmount: discountAmount,
+                totalAmount: totalAmount,
+                paidAmount: paidAmount,
+                outstandingAmount: outstandingAmount,
+                totalCashAmount: cashSummary.totalCashAmount,
+                totalCashTendered: cashSummary.totalCashTendered,
+                changeDue: cashSummary.changeDue,
+                lines: receiptLines,
+                payments: receiptPayments
+            )
+
+            let provisionalBundle = try? receiptStore.persist(source: baseReceipt, version: .local)
+            lastCustomerReceipt = provisionalBundle?.customer
+            lastOwnerReceipt = provisionalBundle?.owner
+
+            do {
+                let response: CreateSaleResponse = try await api.request(
+                    "api/v1/sales",
+                    method: "POST",
+                    body: CreateSaleRequest(
+                        customerName: nullable(customerName),
+                        customerPhone: nullable(customerPhone),
+                        discountAmount: discountAmount,
+                        isCredit: dueDate != nil,
+                        dueDateUtc: dueDate.map { backendDateTime($0) },
+                        lines: lines.map {
+                            SaleLineRequest(
+                                inventoryItemId: $0.inventoryItemId,
+                                quantity: $0.quantity,
+                                unitPrice: $0.unitPrice
+                            )
+                        },
+                        initialPayments: payments.isEmpty ? nil : payments
+                    ),
+                    accessToken: accessToken
+                )
+                let detail: SaleDetailResponse = try await api.request("api/v1/sales/\(response.id)", accessToken: accessToken)
+                upsertRecentSale(detail)
+
+                let canonicalReceipt = ReceiptSourcePayload(
+                    localSaleId: localSaleId,
+                    saleId: response.id,
+                    saleNumber: response.saleNumber,
+                    createdAtUtc: detail.updatedAtUtc,
+                    shopName: shop.name,
+                    cashierName: profile?.fullName ?? "Unknown User",
+                    customerName: detail.customerName ?? nullable(customerName),
+                    subtotal: detail.subtotal,
+                    vatAmount: detail.vatAmount,
+                    discountAmount: detail.discountAmount,
+                    totalAmount: detail.totalAmount,
+                    paidAmount: detail.totalAmount - detail.outstandingAmount,
+                    outstandingAmount: detail.outstandingAmount,
+                    totalCashAmount: cashSummary.totalCashAmount,
+                    totalCashTendered: cashSummary.totalCashTendered,
+                    changeDue: cashSummary.changeDue,
+                    lines: receiptLines,
+                    payments: receiptPayments
+                )
+
+                let canonicalBundle = try? receiptStore.persist(source: canonicalReceipt, version: .canonical)
+                lastCustomerReceipt = canonicalBundle?.customer ?? provisionalBundle?.customer
+                lastOwnerReceipt = canonicalBundle?.owner ?? provisionalBundle?.owner
+                createdBundle = canonicalBundle ?? provisionalBundle
+                await refreshInventory()
+                await refreshCredits()
+                await refreshTodaysSales()
+                statusMessage = (createdBundle?.hasFailures ?? false)
+                    ? "Sale \(response.saleNumber) created. One or more receipts need regeneration."
+                    : "Sale \(response.saleNumber) created."
+            } catch {
+                receiptStore.remove(localSaleId: localSaleId)
+                lastCustomerReceipt = nil
+                lastOwnerReceipt = nil
+                throw error
+            }
+        }
+        return createdBundle
+    }
+
+    func addSalePayment(
+        saleId: String,
+        amount: Double,
+        method: PaymentMethodOption,
+        reference: String,
+        cashTendered: Double?
+    ) async -> ReceiptBundle? {
+        guard let accessToken = auth?.accessToken else { return nil }
+        guard amount > 0 else {
+            statusMessage = "Enter a valid payment amount."
+            return nil
+        }
+        if method == .cash {
+            guard let cashTendered else {
+                statusMessage = "Enter the cash received for this payment."
+                return nil
+            }
+            guard cashTendered >= amount else {
+                statusMessage = "Cash received must be at least the payment amount."
+                return nil
+            }
+        }
+
+        var updatedBundle: ReceiptBundle?
+        await perform { [self] in
+            _ = try await api.requestData(
+                "api/v1/sales/\(saleId)/payments",
                 method: "POST",
-                body: CreateSaleRequest(
-                    customerName: nullable(customerName),
-                    customerPhone: nullable(customerPhone),
-                    discountAmount: discountAmount,
-                    isCredit: dueDate != nil,
-                    dueDateUtc: dueDate.map { backendDateTime($0) },
-                    lines: lines.map {
-                        SaleLineRequest(
-                            inventoryItemId: $0.inventoryItemId,
-                            quantity: $0.quantity,
-                            unitPrice: $0.unitPrice
-                        )
-                    },
-                    initialPayments: payments.isEmpty ? nil : payments
+                body: AddSalePaymentRequest(
+                    method: method.rawValue,
+                    amount: amount,
+                    reference: nullable(reference),
+                    cashTendered: method == .cash ? cashTendered : nil,
+                    note: nil
                 ),
                 accessToken: accessToken
             )
-            let detail: SaleDetailResponse = try await api.request("api/v1/sales/\(response.id)", accessToken: accessToken)
-            let receipt: ReceiptView = try await api.request("api/v1/sales/\(response.id)/receipt", accessToken: accessToken)
-            recentSales.insert(detail, at: 0)
-            lastReceipt = receipt
-            createdReceipt = receipt
-            await refreshInventory()
+
+            let detail: SaleDetailResponse = try await api.request("api/v1/sales/\(saleId)", accessToken: accessToken)
+            upsertRecentSale(detail)
+
+            let customerReceipt: ReceiptView = try await api.request("api/v1/sales/\(saleId)/receipt", accessToken: accessToken)
+            let ownerReceipt: OwnerReceiptView? = capabilities.canViewReports
+                ? try? await api.request("api/v1/sales/\(saleId)/receipt/owner", accessToken: accessToken)
+                : nil
+            let localSaleId = receiptStore.localSaleId(forServerSaleId: saleId) ?? saleId
+            let canonicalSource = customerReceipt.toReceiptSource(
+                localSaleId: localSaleId,
+                cashierName: ownerReceipt?.cashierName ?? profile?.fullName ?? "Unknown User",
+                ownerReceipt: ownerReceipt
+            )
+            let canonicalBundle = try? receiptStore.persist(source: canonicalSource, version: .canonical)
+            lastCustomerReceipt = canonicalBundle?.customer
+            lastOwnerReceipt = capabilities.canViewReports ? canonicalBundle?.owner : nil
+            updatedBundle = canonicalBundle
             await refreshCredits()
             await refreshTodaysSales()
-            statusMessage = "Sale \(response.saleNumber) created."
+            statusMessage = canonicalBundle?.hasFailures == true
+                ? "Payment added. One or more receipts need regeneration."
+                : "Payment added and receipts regenerated."
         }
-        return createdReceipt
+        return updatedBundle
+    }
+
+    func refreshRecentSales(limit: Int = 20) async {
+        guard let accessToken = auth?.accessToken, capabilities.canManageSales else { return }
+        await perform { [self] in
+            let sales: [SaleDetailResponse] = try await api.request("api/v1/sales?limit=\(limit)", accessToken: accessToken)
+            recentSales = sales
+            persistRecentSales()
+        }
     }
 
     func refreshTodaysSales() async {
@@ -1247,7 +1600,8 @@ final class SessionStore: ObservableObject {
     func refreshCredits() async {
         guard let accessToken = auth?.accessToken, capabilities.canManageSales else { return }
         await perform { [self] in
-            credits = try await api.request("api/v1/credits", accessToken: accessToken)
+            let page: PaginatedResponse<CreditAccountView> = try await api.request("api/v1/credits", accessToken: accessToken)
+            credits = page.items
         }
     }
 
@@ -1494,6 +1848,28 @@ final class SessionStore: ObservableObject {
         statusMessage = "Conflict marked to keep local edits."
     }
 
+    private func upsertRecentSale(_ detail: SaleDetailResponse) {
+        recentSales.removeAll { $0.id == detail.id }
+        recentSales.insert(detail, at: 0)
+        if recentSales.count > 20 {
+            recentSales = Array(recentSales.prefix(20))
+        }
+        persistRecentSales()
+    }
+
+    private func restoreRecentSales() {
+        guard let data = defaults.data(forKey: "ios_recent_sales"),
+              let decoded = try? JSONDecoder().decode([SaleDetailResponse].self, from: data) else {
+            return
+        }
+        recentSales = decoded
+    }
+
+    private func persistRecentSales() {
+        guard let data = try? JSONEncoder().encode(recentSales) else { return }
+        defaults.set(data, forKey: "ios_recent_sales")
+    }
+
     private func restoreSession() {
         guard
             let accessToken = defaults.string(forKey: "ios_access_token"),
@@ -1525,6 +1901,7 @@ final class SessionStore: ObservableObject {
         defaults.removeObject(forKey: "ios_refresh_token")
         defaults.removeObject(forKey: "ios_shop_id")
         defaults.removeObject(forKey: "ios_role")
+        defaults.removeObject(forKey: "ios_recent_sales")
     }
 
     private func restoreTheme() {
@@ -1785,5 +2162,330 @@ func generateReceiptPdf(_ receipt: ReceiptView) throws -> URL {
         }
     }
 
+    return url
+}
+
+
+@objc(ReceiptMetadataRecord)
+final class ReceiptMetadataRecord: NSManagedObject {
+    @NSManaged var localSaleId: String
+    @NSManaged var kind: String
+    @NSManaged var version: String
+    @NSManaged var saleId: String?
+    @NSManaged var saleNumber: String
+    @NSManaged var filePath: String
+    @NSManaged var generatedAt: Date
+}
+
+final class ReceiptMetadataStore {
+    static let shared = ReceiptMetadataStore()
+
+    private let container: NSPersistentContainer
+
+    private init() {
+        let model = NSManagedObjectModel()
+        let entity = NSEntityDescription()
+        entity.name = "ReceiptMetadataRecord"
+        entity.managedObjectClassName = NSStringFromClass(ReceiptMetadataRecord.self)
+        entity.properties = [
+            makeAttribute(name: "localSaleId", type: .stringAttributeType),
+            makeAttribute(name: "kind", type: .stringAttributeType),
+            makeAttribute(name: "version", type: .stringAttributeType),
+            makeAttribute(name: "saleId", type: .stringAttributeType, optional: true),
+            makeAttribute(name: "saleNumber", type: .stringAttributeType),
+            makeAttribute(name: "filePath", type: .stringAttributeType),
+            makeAttribute(name: "generatedAt", type: .dateAttributeType)
+        ]
+        model.entities = [entity]
+
+        container = NSPersistentContainer(name: "ReceiptMetadata", managedObjectModel: model)
+        let description = NSPersistentStoreDescription(url: receiptDirectoryURL().appendingPathComponent("receipt-metadata.sqlite"))
+        description.type = NSSQLiteStoreType
+        container.persistentStoreDescriptions = [description]
+        container.loadPersistentStores { _, error in
+            if let error {
+                fatalError("Failed to load receipt metadata store: \(error.localizedDescription)")
+            }
+        }
+        container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+    }
+
+    func persist(source: ReceiptSourcePayload, version: ReceiptVersion) throws -> ReceiptBundle {
+        let customerURL = try generateCustomerReceiptPdf(source: source, version: version)
+        let ownerURL = try generateOwnerReceiptPdf(source: source, version: version)
+        let context = container.viewContext
+        upsert(localSaleId: source.localSaleId, kind: .customer, version: version, saleId: source.saleId, saleNumber: source.saleNumber, fileURL: customerURL, context: context)
+        upsert(localSaleId: source.localSaleId, kind: .owner, version: version, saleId: source.saleId, saleNumber: source.saleNumber, fileURL: ownerURL, context: context)
+        if context.hasChanges {
+            try context.save()
+        }
+        return ReceiptBundle(
+            localSaleId: source.localSaleId,
+            customer: ReceiptArtifact(localSaleId: source.localSaleId, kind: .customer, version: version, fileURL: customerURL, saleId: source.saleId, saleNumber: source.saleNumber, generatedAt: Date()),
+            owner: ReceiptArtifact(localSaleId: source.localSaleId, kind: .owner, version: version, fileURL: ownerURL, saleId: source.saleId, saleNumber: source.saleNumber, generatedAt: Date())
+        )
+    }
+
+    func remove(localSaleId: String) {
+        let context = container.viewContext
+        let request = NSFetchRequest<ReceiptMetadataRecord>(entityName: "ReceiptMetadataRecord")
+        request.predicate = NSPredicate(format: "localSaleId == %@", localSaleId)
+        let records = (try? context.fetch(request)) ?? []
+        for record in records {
+            try? FileManager.default.removeItem(atPath: record.filePath)
+            context.delete(record)
+        }
+        if context.hasChanges {
+            try? context.save()
+        }
+    }
+
+    func localSaleId(forServerSaleId saleId: String) -> String? {
+        let context = container.viewContext
+        let request = NSFetchRequest<ReceiptMetadataRecord>(entityName: "ReceiptMetadataRecord")
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "saleId == %@", saleId)
+        return try? context.fetch(request).first?.localSaleId
+    }
+
+    private func upsert(localSaleId: String, kind: ReceiptKind, version: ReceiptVersion, saleId: String?, saleNumber: String, fileURL: URL, context: NSManagedObjectContext) {
+        let request = NSFetchRequest<ReceiptMetadataRecord>(entityName: "ReceiptMetadataRecord")
+        request.fetchLimit = 1
+        request.predicate = NSPredicate(format: "localSaleId == %@ AND kind == %@", localSaleId, kind.rawValue)
+        let record = (try? context.fetch(request).first) ?? ReceiptMetadataRecord(context: context)
+        record.localSaleId = localSaleId
+        record.kind = kind.rawValue
+        record.version = version.rawValue
+        record.saleId = saleId
+        record.saleNumber = saleNumber
+        record.filePath = fileURL.path
+        record.generatedAt = Date()
+    }
+}
+
+private func makeAttribute(name: String, type: NSAttributeType, optional: Bool = false) -> NSAttributeDescription {
+    let attribute = NSAttributeDescription()
+    attribute.name = name
+    attribute.attributeType = type
+    attribute.isOptional = optional
+    return attribute
+}
+
+private func receiptDirectoryURL() -> URL {
+    let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
+    let directory = base.appendingPathComponent("shopkeeper-ios-receipts", isDirectory: true)
+    try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    return directory
+}
+
+private func receiptFileURL(localSaleId: String, kind: ReceiptKind, version: ReceiptVersion, saleNumber: String) -> URL {
+    let safeSaleNumber = saleNumber.replacingOccurrences(of: "/", with: "-")
+    return receiptDirectoryURL().appendingPathComponent("\(localSaleId)-\(version.rawValue)-\(kind.rawValue)-\(safeSaleNumber).pdf")
+}
+
+private func aggregateCashSummary(_ payments: [LocalReceiptPaymentPayload]) -> (totalCashAmount: Double, totalCashTendered: Double, changeDue: Double) {
+    let cashPayments = payments.filter { $0.method == PaymentMethodOption.cash.rawValue }
+    let totalCashAmount = cashPayments.reduce(0) { $0 + $1.amount }
+    let totalCashTendered = cashPayments.reduce(0) { $0 + ($1.cashTendered ?? 0) }
+    return (totalCashAmount, totalCashTendered, max(0, totalCashTendered - totalCashAmount))
+}
+
+private extension ReceiptView {
+    func toReceiptSource(localSaleId: String, cashierName: String, ownerReceipt: OwnerReceiptView?) -> ReceiptSourcePayload {
+        let ownerCostLookup = Dictionary(uniqueKeysWithValues: (ownerReceipt?.lines ?? []).map {
+            ("\($0.productName)|\($0.quantity)|\($0.lineTotal)", $0.unitCost)
+        })
+        return ReceiptSourcePayload(
+            localSaleId: localSaleId,
+            saleId: saleId,
+            saleNumber: saleNumber,
+            createdAtUtc: createdAtUtc,
+            shopName: shopName,
+            cashierName: cashierName,
+            customerName: customerName,
+            subtotal: subtotal,
+            vatAmount: vatAmount,
+            discountAmount: discountAmount,
+            totalAmount: totalAmount,
+            paidAmount: paidAmount,
+            outstandingAmount: outstandingAmount,
+            totalCashAmount: totalCashAmount,
+            totalCashTendered: totalCashTendered,
+            changeDue: changeDue,
+            lines: lines.map {
+                let key = "\($0.productName)|\($0.quantity)|\($0.lineTotal)"
+                return LocalReceiptLinePayload(
+                    productName: $0.productName,
+                    quantity: $0.quantity,
+                    unitPrice: $0.unitPrice,
+                    unitCost: ownerCostLookup[key] ?? 0,
+                    lineTotal: $0.lineTotal
+                )
+            },
+            payments: payments.map {
+                LocalReceiptPaymentPayload(
+                    method: $0.method,
+                    amount: $0.amount,
+                    reference: $0.reference,
+                    cashTendered: $0.cashTendered
+                )
+            }
+        )
+    }
+}
+
+private func customerReceiptView(from source: ReceiptSourcePayload) -> ReceiptView {
+    ReceiptView(
+        saleId: source.saleId ?? source.localSaleId,
+        saleNumber: source.saleNumber,
+        createdAtUtc: source.createdAtUtc,
+        shopName: source.shopName,
+        customerName: source.customerName,
+        subtotal: source.subtotal,
+        vatAmount: source.vatAmount,
+        discountAmount: source.discountAmount,
+        totalAmount: source.totalAmount,
+        paidAmount: source.paidAmount,
+        outstandingAmount: source.outstandingAmount,
+        totalCashAmount: source.totalCashAmount,
+        totalCashTendered: source.totalCashTendered,
+        changeDue: source.changeDue,
+        lines: source.lines.map {
+            ReceiptLineView(productName: $0.productName, quantity: $0.quantity, unitPrice: $0.unitPrice, lineTotal: $0.lineTotal)
+        },
+        payments: source.payments.map {
+            ReceiptPaymentView(method: $0.method, amount: $0.amount, reference: $0.reference, cashTendered: $0.cashTendered, changeDue: max(0, ($0.cashTendered ?? 0) - $0.amount))
+        }
+    )
+}
+
+private func ownerReceiptView(from source: ReceiptSourcePayload) -> OwnerReceiptView {
+    let lineViews = source.lines.map {
+        OwnerReceiptLineView(
+            productName: $0.productName,
+            quantity: $0.quantity,
+            unitPrice: $0.unitPrice,
+            unitCost: $0.unitCost,
+            lineTotal: $0.lineTotal,
+            lineGrossProfit: $0.lineTotal - (Double($0.quantity) * $0.unitCost)
+        )
+    }
+    let totalCost = lineViews.reduce(0) { $0 + $1.lineCostTotal }
+    let grossProfit = source.subtotal - source.discountAmount - totalCost
+    let margin = source.totalAmount <= 0 ? 0 : (grossProfit / source.totalAmount) * 100
+    return OwnerReceiptView(
+        saleId: source.saleId ?? source.localSaleId,
+        saleNumber: source.saleNumber,
+        createdAtUtc: source.createdAtUtc,
+        shopName: source.shopName,
+        customerName: source.customerName,
+        createdByName: source.cashierName,
+        subtotal: source.subtotal,
+        vatAmount: source.vatAmount,
+        discountAmount: source.discountAmount,
+        totalAmount: source.totalAmount,
+        paidAmount: source.paidAmount,
+        outstandingAmount: source.outstandingAmount,
+        totalCashAmount: source.totalCashAmount,
+        totalCashTendered: source.totalCashTendered,
+        changeDue: source.changeDue,
+        totalCost: totalCost,
+        grossProfit: grossProfit,
+        grossMarginPercent: margin,
+        lines: lineViews,
+        payments: source.payments.map {
+            ReceiptPaymentView(method: $0.method, amount: $0.amount, reference: $0.reference, cashTendered: $0.cashTendered, changeDue: max(0, ($0.cashTendered ?? 0) - $0.amount))
+        }
+    )
+}
+
+private func generateCustomerReceiptPdf(source: ReceiptSourcePayload, version: ReceiptVersion) throws -> URL {
+    let receipt = customerReceiptView(from: source)
+    let height = max(420, 240 + (receipt.lines.count * 18) + (receipt.payments.count * 16) + (receipt.totalCashAmount > 0 ? 24 : 0))
+    let width: CGFloat = 226
+    let url = receiptFileURL(localSaleId: source.localSaleId, kind: .customer, version: version, saleNumber: source.saleNumber)
+    let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: width, height: CGFloat(height)))
+    try renderer.writePDF(to: url) { context in
+        context.beginPage()
+        let title: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 14)]
+        let body: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 9)]
+        let bold: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 9)]
+        var y: CGFloat = 16
+        NSString(string: source.shopName).draw(at: CGPoint(x: 12, y: y), withAttributes: title)
+        y += 20
+        NSString(string: "Sale: \(receipt.saleNumber)").draw(at: CGPoint(x: 12, y: y), withAttributes: body)
+        y += 14
+        NSString(string: "Date: \(displayDate(receipt.createdAtUtc))").draw(at: CGPoint(x: 12, y: y), withAttributes: body)
+        y += 14
+        NSString(string: "Customer: \(receipt.customerName ?? "Walk-in Customer")").draw(at: CGPoint(x: 12, y: y), withAttributes: body)
+        y += 18
+        for line in receipt.lines {
+            NSString(string: "\(line.productName) x\(line.quantity)").draw(at: CGPoint(x: 12, y: y), withAttributes: body)
+            NSString(string: currency(line.lineTotal)).draw(at: CGPoint(x: width - 86, y: y), withAttributes: body)
+            y += 14
+        }
+        y += 10
+        for summary in [
+            "Subtotal: \(currency(receipt.subtotal))",
+            "Discount: \(currency(receipt.discountAmount))",
+            "VAT: \(currency(receipt.vatAmount))",
+            "Total: \(currency(receipt.totalAmount))",
+            "Paid: \(currency(receipt.paidAmount))",
+            "Outstanding: \(currency(receipt.outstandingAmount))"
+        ] {
+            NSString(string: summary).draw(at: CGPoint(x: 12, y: y), withAttributes: body)
+            y += 14
+        }
+        if receipt.totalCashAmount > 0 {
+            NSString(string: "Total Cash: \(currency(receipt.totalCashTendered))  Change: \(currency(receipt.changeDue))").draw(at: CGPoint(x: 12, y: y), withAttributes: bold)
+        }
+    }
+    return url
+}
+
+private func generateOwnerReceiptPdf(source: ReceiptSourcePayload, version: ReceiptVersion) throws -> URL {
+    let receipt = ownerReceiptView(from: source)
+    let url = receiptFileURL(localSaleId: source.localSaleId, kind: .owner, version: version, saleNumber: source.saleNumber)
+    let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
+    try renderer.writePDF(to: url) { context in
+        context.beginPage()
+        let title: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 20)]
+        let body: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 11)]
+        let bold: [NSAttributedString.Key: Any] = [.font: UIFont.boldSystemFont(ofSize: 11)]
+        var y: CGFloat = 28
+        NSString(string: "Owner Receipt").draw(at: CGPoint(x: 32, y: y), withAttributes: title)
+        y += 24
+        NSString(string: receipt.shopName).draw(at: CGPoint(x: 32, y: y), withAttributes: bold)
+        y += 16
+        NSString(string: "Sale: \(receipt.saleNumber) • Cashier: \(receipt.cashierName)").draw(at: CGPoint(x: 32, y: y), withAttributes: body)
+        y += 16
+        NSString(string: "Date: \(displayDate(receipt.createdAtUtc)) • Customer: \(receipt.customerName ?? "Walk-in Customer")").draw(at: CGPoint(x: 32, y: y), withAttributes: body)
+        y += 22
+        for line in receipt.lines {
+            NSString(string: line.productName).draw(at: CGPoint(x: 32, y: y), withAttributes: body)
+            NSString(string: "Qty \(line.quantity)").draw(at: CGPoint(x: 260, y: y), withAttributes: body)
+            NSString(string: "Sell \(currency(line.lineTotal))").draw(at: CGPoint(x: 320, y: y), withAttributes: body)
+            NSString(string: "Cost \(currency(line.lineCostTotal))").draw(at: CGPoint(x: 430, y: y), withAttributes: body)
+            y += 16
+        }
+        y += 12
+        for summary in [
+            "Subtotal: \(currency(receipt.subtotal))",
+            "Discount: \(currency(receipt.discountAmount))",
+            "VAT: \(currency(receipt.vatAmount))",
+            "Total: \(currency(receipt.totalAmount))",
+            "Paid: \(currency(receipt.paidAmount))",
+            "Outstanding: \(currency(receipt.outstandingAmount))",
+            "COGS: \(currency(receipt.totalCost))",
+            "Gross Profit: \(currency(receipt.grossProfit))",
+            String(format: "Gross Margin: %.2f%%", receipt.grossMarginPercent)
+        ] {
+            NSString(string: summary).draw(at: CGPoint(x: 32, y: y), withAttributes: body)
+            y += 16
+        }
+        if receipt.totalCashAmount > 0 {
+            NSString(string: "Total Cash Received: \(currency(receipt.totalCashTendered)) • Change Due: \(currency(receipt.changeDue))").draw(at: CGPoint(x: 32, y: y), withAttributes: bold)
+        }
+    }
     return url
 }
